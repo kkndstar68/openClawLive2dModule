@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Agent</title>
+    <!-- Cubism 4 Core（提供全局 Live2DCubismCore，给 model3.json 使用） -->
+    <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+
+  </head>
+  <body>
+    <!-- Canvas 渲染层 -->
+    <canvas id="canvas" style="position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; pointer-events: none;"></canvas>
+
+    <!-- UI 元素 -->
+    <div style="position: relative; z-index: 10; padding: 20px;">
+      <h1>OpenClaw Agent Voice Interface</h1>
+      <button id="talkBtn">开始对话</button>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
