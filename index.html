@@ -4,21 +4,52 @@
     <meta charset="utf-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenClaw Agent</title>
-    <!-- Cubism 4 Core（提供全局 Live2DCubismCore，给 model3.json 使用） -->
+    <title>Live2D 浮窗</title>
+    <!-- Cubism 4 Core -->
     <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
-
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      /* 浮窗拖拽条：仅 Electron 下可拖拽窗口 */
+      #electron-drag {
+        position: fixed; top: 0; left: 0; right: 0; height: 32px;
+        -webkit-app-region: drag;
+        z-index: 100;
+        display: flex; align-items: center; justify-content: flex-end;
+        padding: 0 8px;
+      }
+      #electron-drag .btn {
+        -webkit-app-region: no-drag;
+        width: 24px; height: 24px; border: none; border-radius: 4px;
+        cursor: pointer; font-size: 14px; line-height: 1;
+        background: rgba(0,0,0,0.25); color: #fff;
+        margin-left: 4px;
+      }
+      #electron-drag .btn:hover { background: rgba(0,0,0,0.5); }
+      #electron-drag .btn.close:hover { background: #e74c3c; }
+      /* 非 Electron 时隐藏拖拽条 */
+      body:not(.electron) #electron-drag { display: none; }
+    </style>
   </head>
   <body>
-    <!-- Canvas 渲染层 -->
-    <canvas id="canvas" style="position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; pointer-events: none;"></canvas>
-
-    <!-- UI 元素 -->
-    <div style="position: relative; z-index: 10; padding: 20px;">
-      <h1>OpenClaw Agent Voice Interface</h1>
-      <button id="talkBtn">开始对话</button>
+    <div id="electron-drag">
+      <button type="button" class="btn minimize" title="最小化" aria-label="最小化">−</button>
+      <button type="button" class="btn close" title="关闭" aria-label="关闭">×</button>
     </div>
 
+    <canvas id="canvas" style="position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none;"></canvas>
+
+    <div style="position: absolute; bottom: 16px; left: 0; right: 0; z-index: 10; text-align: center; pointer-events: none;">
+      <button id="talkBtn" style="pointer-events: auto; padding: 8px 16px; border-radius: 8px;">开始对话</button>
+    </div>
+
+    <script>
+      if (typeof window.electronAPI !== 'undefined') {
+        document.body.classList.add('electron');
+        document.querySelector('#electron-drag .close').onclick = () => window.electronAPI.close();
+        document.querySelector('#electron-drag .minimize').onclick = () => window.electronAPI.minimize();
+      }
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -19,7 +19,9 @@ async function initLive2D() {
   // 全局关闭舞台的事件模式
   (app.stage as any).eventMode = 'none';
 
-  const modelUrl = '/galgame/ele_a0/model.model3.json';
+  // 使用 base 以支持 Electron 打包后 file:// 加载
+const base = import.meta.env.BASE_URL || '/';
+const modelUrl = base + 'galgame/ele_a0/model.model3.json';
 
   try {
     console.log('正在加载模型...');
