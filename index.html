@@ -40,7 +40,21 @@
     <canvas id="canvas" style="position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none;"></canvas>
 
     <div style="position: absolute; bottom: 16px; left: 0; right: 0; z-index: 10; text-align: center; pointer-events: none;">
-      <button id="talkBtn" style="pointer-events: auto; padding: 8px 16px; border-radius: 8px;">开始对话</button>
+      <div style="display: inline-flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: auto; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,0.35); backdrop-filter: blur(6px); color: #fff; max-width: 420px; margin: 0 auto;">
+        <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center;">
+          <label for="modelSelect">模型:</label>
+          <select id="modelSelect" style="max-width: 220px; padding: 2px 6px; border-radius: 4px; border: none; outline: none;">
+            <option>加载中...</option>
+          </select>
+        </div>
+        <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center;">
+          <label for="soundSelect">音频:</label>
+          <select id="soundSelect" style="max-width: 220px; padding: 2px 6px; border-radius: 4px; border: none; outline: none;">
+            <option>暂无音频</option>
+          </select>
+          <button id="soundTestBtn" style="padding: 4px 10px; border-radius: 6px; border: none; cursor: pointer;">声音测试</button>
+        </div>
+      </div>
     </div>
 
     <script>
