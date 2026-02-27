@@ -30,6 +30,7 @@
       /* 非 Electron 时隐藏拖拽条 */
       body:not(.electron) #electron-drag { display: none; }
     </style>
+    <script type="module" crossorigin src="/assets/index-DWepXjZs.js"></script>
   </head>
   <body>
     <div id="electron-drag">
@@ -67,6 +68,5 @@
         document.querySelector('#electron-drag .minimize').onclick = () => window.electronAPI.minimize();
       }
     </script>
-    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -177,6 +177,7 @@ function setupModelSelector() {
 function setupSoundSelector() {
   const select = document.getElementById('soundSelect') as HTMLSelectElement | null;
   const testBtn = document.getElementById('soundTestBtn') as HTMLButtonElement | null;
+  const localAudioTestBtn = document.getElementById('localAudioTestBtn') as HTMLButtonElement | null;
   if (!select || !testBtn) return;
 
   select.innerHTML = '';
@@ -188,7 +189,6 @@ function setupSoundSelector() {
     select.appendChild(opt);
     select.disabled = true;
     testBtn.disabled = true;
-    return;
   }
 
   for (const optDef of SOUND_OPTIONS) {
@@ -198,11 +198,13 @@ function setupSoundSelector() {
     select.appendChild(optionEl);
   }
 
-  select.value = SOUND_OPTIONS[0].id;
+  if (SOUND_OPTIONS.length > 0) {
+    select.value = SOUND_OPTIONS[0].id;
+  }
 
   testBtn.addEventListener('click', () => {
-    if (!currentModel || typeof (currentModel as any).speak !== 'function') {
-      console.warn('当前模型不支持 speak 接口');
+    if (!currentModel) {
+      console.warn('请先加载模型');
       return;
     }
 
@@ -210,25 +212,118 @@ function setupSoundSelector() {
     const sound = SOUND_OPTIONS.find((s) => s.id === selectedId);
     if (!sound) return;
 
-    // 停止上一次播放，避免重叠
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio.currentTime = 0;
+    // 使用新的 playAudioWithLipSync 函数
+    playAudioWithLipSync(sound.url);
+  });
+
+  // 为本地音频测试按钮添加点击事件
+  if (localAudioTestBtn) {
+    localAudioTestBtn.addEventListener('click', () => {
+      // 播放 public/sound/test.wav
+      const audioPath = `${base}sound/test.wav`;
+      playAudioWithLipSync(audioPath);
+    });
+  }
+}
+
+// 实现本地音频与口型同步的核心方法（强接管版本）
+function playAudioWithLipSync(audioUrl: string) {
+  if (!currentModel) {
+    console.warn('请先加载模型');
+    return;
+  }
+
+  // 停止上一次播放，避免重叠
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+  }
+
+  // 创建音频元素
+  const audio = new Audio(audioUrl);
+  currentAudio = audio;
+
+  // 先触发一个动作（如果模型有 Action 组会随机播一个）
+  if (typeof (currentModel as any).motion === 'function') {
+    (currentModel as any).motion('Action');
+  }
+
+  // 使用 AudioContext 和 AnalyserNode 强接管音频输出
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const source = audioContext.createMediaElementSource(audio);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 256; // 设置 fftSize 为 256
+  const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+  source.connect(analyser);
+  analyser.connect(audioContext.destination);
+
+  let animationId: number;
+
+  function updateMouth() {
+    if (!currentModel) return;
+
+    analyser.getByteFrequencyData(dataArray);
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      sum += dataArray[i];
+    }
+    const average = sum / dataArray.length;
+    const volumeValue = Math.min(average / 255, 1);
+
+    // 核心：强行设置模型嘴巴的张合度
+    if (currentModel.internalModel && currentModel.internalModel.coreModel && 
+        typeof currentModel.internalModel.coreModel.setParameterValueById === 'function') {
+      currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', volumeValue);
+    } else if (typeof (currentModel as any).setParamValue === 'function') {
+      // 备选方案：使用 setParamValue
+      (currentModel as any).setParamValue('ParamMouthOpenY', volumeValue);
     }
 
-    const audio = new Audio(sound.url);
-    currentAudio = audio;
+    if (!audio.paused) {
+      animationId = requestAnimationFrame(updateMouth);
+    } else {
+      // 音频播放完毕，自动闭嘴
+      if (currentModel.internalModel && currentModel.internalModel.coreModel && 
+          typeof currentModel.internalModel.coreModel.setParameterValueById === 'function') {
+        currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', 0);
+      } else if (typeof (currentModel as any).setParamValue === 'function') {
+        (currentModel as any).setParamValue('ParamMouthOpenY', 0);
+      }
+    }
+  }
 
-    // 先触发一个动作（如果模型有 Action 组会随机播一个）
+  // 音频播放开始时启动动画循环
+  audio.addEventListener('play', () => {
+    updateMouth();
+  });
+
+  // 音频播放完毕后，清除动画循环并触发默认的 idle 动作
+  audio.addEventListener('ended', () => {
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+    }
+    // 确保闭嘴
+    if (currentModel.internalModel && currentModel.internalModel.coreModel && 
+        typeof currentModel.internalModel.coreModel.setParameterValueById === 'function') {
+      currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', 0);
+    } else if (typeof (currentModel as any).setParamValue === 'function') {
+      (currentModel as any).setParamValue('ParamMouthOpenY', 0);
+    }
+    // 触发 idle 动作
     if (typeof (currentModel as any).motion === 'function') {
-      (currentModel as any).motion('Action');
+      (currentModel as any).motion('Idle');
     }
+  });
 
-    // 使用 speak 让模型根据音量自动口型同步
-    (currentModel as any).speak(audio);
-    void audio.play();
+  // 播放音频
+  void audio.play().catch(err => {
+    console.error('音频播放失败:', err);
   });
 }
+
+// 暴露方法到全局，方便测试
+(window as any).playAudioWithLipSync = playAudioWithLipSync;
 
 function initLive2D() {
   setupModelSelector();
