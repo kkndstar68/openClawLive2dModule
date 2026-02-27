@@ -325,9 +325,117 @@ function playAudioWithLipSync(audioUrl: string) {
 // 暴露方法到全局，方便测试
 (window as any).playAudioWithLipSync = playAudioWithLipSync;
 
+// 聊天相关功能
+function setupChatInterface() {
+  const chatInput = document.getElementById('chatInput') as HTMLInputElement | null;
+  const sendBtn = document.getElementById('sendBtn') as HTMLButtonElement | null;
+  const voiceBtn = document.getElementById('voiceBtn') as HTMLButtonElement | null;
+  const chatLog = document.getElementById('chatLog') as HTMLDivElement | null;
+
+  if (!chatInput || !sendBtn || !voiceBtn || !chatLog) return;
+
+  // 绑定空的 console.log 事件
+  voiceBtn.addEventListener('click', () => {
+    console.log('语音录入按钮点击');
+  });
+
+  // 发送按钮点击事件
+  sendBtn.addEventListener('click', () => {
+    const message = chatInput.value.trim();
+    if (message) {
+      sendMessageToLLM(message);
+      chatInput.value = '';
+    }
+  });
+
+  // 输入框回车发送
+  chatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      const message = chatInput.value.trim();
+      if (message) {
+        sendMessageToLLM(message);
+        chatInput.value = '';
+      }
+    }
+  });
+}
+
+// 模拟调用 OpenClaw 的函数
+function sendMessageToLLM(text: string) {
+  // 显示用户消息
+  addMessageToChatLog('user', text);
+
+  // 模拟 LLM 响应
+  setTimeout(() => {
+    // 模拟 LLM 返回的带表情标签的文本
+    const mockResponses = [
+      '[smile] 主人你好呀！',
+      '[happy] 今天过得怎么样？',
+      '[sad] 我有点无聊呢',
+      '[angry] 别碰我！',
+      '[surprised] 真的吗？'
+    ];
+    const randomResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)];
+    
+    // 解析表情和文本
+    const { emotion, cleanText } = parseEmotionFromText(randomResponse);
+    
+    // 打印表情到控制台
+    console.log('解析到的表情:', emotion);
+    
+    // 显示机器人回复
+    addMessageToChatLog('bot', cleanText);
+  }, 1000);
+}
+
+// 解析表情标签的函数
+function parseEmotionFromText(text: string) {
+  const regex = /^\[(\w+)\]\s*(.*)$/;
+  const match = text.match(regex);
+  
+  if (match) {
+    return {
+      emotion: match[1],
+      cleanText: match[2]
+    };
+  }
+  
+  return {
+    emotion: 'neutral',
+    cleanText: text
+  };
+}
+
+// 添加消息到聊天记录
+function addMessageToChatLog(sender: 'user' | 'bot', text: string) {
+  const chatLog = document.getElementById('chatLog') as HTMLDivElement | null;
+  if (!chatLog) return;
+
+  const messageDiv = document.createElement('div');
+  messageDiv.style.marginBottom = '8px';
+  messageDiv.style.padding = '4px 8px';
+  messageDiv.style.borderRadius = '4px';
+  
+  if (sender === 'user') {
+    messageDiv.style.backgroundColor = 'rgba(255,255,255,0.2)';
+    messageDiv.style.alignSelf = 'flex-end';
+    messageDiv.style.textAlign = 'right';
+    messageDiv.textContent = `你: ${text}`;
+  } else {
+    messageDiv.style.backgroundColor = 'rgba(0,122,255,0.2)';
+    messageDiv.style.alignSelf = 'flex-start';
+    messageDiv.style.textAlign = 'left';
+    messageDiv.textContent = `看板娘: ${text}`;
+  }
+
+  chatLog.appendChild(messageDiv);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
 function initLive2D() {
   setupModelSelector();
   setupSoundSelector();
+  setupChatInterface();
   // 如果没有下拉框（例如纯网页嵌入），也加载一个默认模型
   if (!document.getElementById('modelSelect') && MODEL_OPTIONS.length > 0) {
     void loadModel(MODEL_OPTIONS[0].path);

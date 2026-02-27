@@ -41,6 +41,13 @@
 
     <div style="position: absolute; bottom: 16px; left: 0; right: 0; z-index: 10; text-align: center; pointer-events: none;">
       <div style="display: inline-flex; flex-direction: column; gap: 6px; align-items: center; pointer-events: auto; padding: 8px 12px; border-radius: 10px; background: rgba(0,0,0,0.35); backdrop-filter: blur(6px); color: #fff; max-width: 420px; margin: 0 auto; -webkit-app-region: no-drag;">
+        <!-- 聊天记录展示区 -->
+        <div id="chatLog" style="width: 100%; height: 150px; overflow-y: auto; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.2); margin-bottom: 8px; -webkit-app-region: no-drag;">
+          <div style="text-align: left; font-size: 14px; line-height: 1.4;">
+            <!-- 聊天记录将在这里显示 -->
+          </div>
+        </div>
+        
         <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center;">
           <label for="modelSelect">模型:</label>
           <select id="modelSelect" style="max-width: 220px; padding: 2px 6px; border-radius: 4px; border: none; outline: none; -webkit-app-region: no-drag;">
@@ -56,6 +63,13 @@
         </div>
         <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center; margin-top: 8px;">
           <button id="localAudioTestBtn" style="padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; -webkit-app-region: no-drag;">播放本地语音测试口型</button>
+        </div>
+        
+        <!-- 聊天交互区 -->
+        <div style="display: flex; gap: 8px; align-items: center; width: 100%; margin-top: 8px; -webkit-app-region: no-drag;">
+          <input id="chatInput" type="text" placeholder="和看板娘聊聊..." style="flex: 0.7; padding: 6px 10px; border-radius: 6px; border: none; outline: none; background: rgba(255,255,255,0.1); color: #fff; -webkit-app-region: no-drag;">
+          <button id="voiceBtn" style="flex: 0.15; padding: 6px 10px; border-radius: 6px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; -webkit-app-region: no-drag;">按住说话</button>
+          <button id="sendBtn" style="flex: 0.15; padding: 6px 10px; border-radius: 6px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; -webkit-app-region: no-drag;">发送</button>
         </div>
       </div>
     </div>
