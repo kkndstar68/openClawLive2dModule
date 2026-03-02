@@ -1,4 +1,5 @@
 import * as PIXI from 'pixi.js';
+import { processChat } from './chatAgentService.js';
 
 // 将 PIXI 暴露到全局（给 pixi-live2d-display 用）
 (window as any).PIXI = PIXI;
@@ -331,13 +332,94 @@ function setupChatInterface() {
   const sendBtn = document.getElementById('sendBtn') as HTMLButtonElement | null;
   const voiceBtn = document.getElementById('voiceBtn') as HTMLButtonElement | null;
   const chatLog = document.getElementById('chatLog') as HTMLDivElement | null;
+  const voiceSelect = document.getElementById('voiceSelect') as HTMLSelectElement | null;
 
-  if (!chatInput || !sendBtn || !voiceBtn || !chatLog) return;
+  if (!chatInput || !sendBtn || !voiceBtn || !chatLog || !voiceSelect) return;
 
-  // 绑定空的 console.log 事件
-  voiceBtn.addEventListener('click', () => {
-    console.log('语音录入按钮点击');
+  // 语音选择下拉框事件
+  voiceSelect.addEventListener('change', () => {
+    currentVoice = voiceSelect.value;
+    console.log('已切换语音:', currentVoice);
   });
+
+  // 测试 Agent 接口按钮
+  const testAgentBtn = document.getElementById('testAgentBtn') as HTMLButtonElement | null;
+  if (testAgentBtn) {
+    testAgentBtn.addEventListener('click', () => {
+      // 发送测试消息
+      sendMessageToLLM('你好，我是测试消息');
+    });
+  }
+
+  // 监听 OpenClaw 消息
+  if (typeof window.electronAPI !== 'undefined' && window.electronAPI.onOpenClawMessage) {
+    window.electronAPI.onOpenClawMessage((message: string) => {
+      console.log('收到 OpenClaw 消息:', message);
+      // 解析消息，提取情感标签和纯文本
+      const { emotion, cleanText } = parseEmotionFromText(message);
+      // 显示机器人回复
+      addMessageToChatLog('bot', cleanText);
+      // 触发 Live2D 表情
+      if (currentModel && typeof (currentModel as any).motion === 'function') {
+        (currentModel as any).motion(emotion);
+      }
+    });
+  }
+
+  // 录音转文字功能
+  let recognition: SpeechRecognition | null = null;
+  let isRecording = false;
+
+  voiceBtn.addEventListener('mousedown', startRecording);
+  voiceBtn.addEventListener('mouseup', stopRecording);
+  voiceBtn.addEventListener('mouseleave', stopRecording);
+
+  function startRecording() {
+    if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+      console.error('浏览器不支持语音识别');
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+    recognition = new SpeechRecognition();
+    recognition.lang = 'zh-CN';
+    recognition.continuous = false;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      isRecording = true;
+      voiceBtn.textContent = '正在录音...';
+      voiceBtn.style.background = 'rgba(255,0,0,0.5)';
+    };
+
+    recognition.onresult = (event) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      chatInput.value = transcript;
+    };
+
+    recognition.onerror = (event) => {
+      console.error('语音识别错误:', event.error);
+      stopRecording();
+    };
+
+    recognition.onend = () => {
+      stopRecording();
+    };
+
+    recognition.start();
+  }
+
+  function stopRecording() {
+    if (recognition && isRecording) {
+      recognition.stop();
+      isRecording = false;
+      voiceBtn.textContent = '按住说话';
+      voiceBtn.style.background = 'rgba(255,255,255,0.2)';
+    }
+  }
 
   // 发送按钮点击事件
   sendBtn.addEventListener('click', () => {
@@ -360,32 +442,30 @@ function setupChatInterface() {
   });
 }
 
-// 模拟调用 OpenClaw 的函数
-function sendMessageToLLM(text: string) {
+// 调用 OpenClaw Agent 的函数
+async function sendMessageToLLM(text: string) {
   // 显示用户消息
   addMessageToChatLog('user', text);
 
-  // 模拟 LLM 响应
-  setTimeout(() => {
-    // 模拟 LLM 返回的带表情标签的文本
-    const mockResponses = [
-      '[smile] 主人你好呀！',
-      '[happy] 今天过得怎么样？',
-      '[sad] 我有点无聊呢',
-      '[angry] 别碰我！',
-      '[surprised] 真的吗？'
-    ];
-    const randomResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)];
-    
-    // 解析表情和文本
-    const { emotion, cleanText } = parseEmotionFromText(randomResponse);
+  try {
+    // 调用 processChat 函数处理用户输入
+    const result = await processChat(text);
     
     // 打印表情到控制台
-    console.log('解析到的表情:', emotion);
+    console.log('解析到的表情:', result.emotion);
     
     // 显示机器人回复
-    addMessageToChatLog('bot', cleanText);
-  }, 1000);
+    addMessageToChatLog('bot', result.pureText);
+    
+    // 触发 Live2D 表情
+    if (currentModel && typeof (currentModel as any).motion === 'function') {
+      (currentModel as any).motion(result.emotion);
+    }
+  } catch (error) {
+    console.error('发送消息到 LLM 失败:', error);
+    // 显示错误消息
+    addMessageToChatLog('bot', '哎呀，我好像断网了...');
+  }
 }
 
 // 解析表情标签的函数
@@ -403,6 +483,80 @@ function parseEmotionFromText(text: string) {
   return {
     emotion: 'neutral',
     cleanText: text
+  };
+}
+
+// 文字转语音功能
+let currentVoice = 'zh-CN-XiaoxiaoNeural'; // 默认语音
+
+async function textToSpeech(text: string) {
+  try {
+    // 尝试使用浏览器内置的 SpeechSynthesis API
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      
+      // 设置语音
+      const voices = window.speechSynthesis.getVoices();
+      const selectedVoice = voices.find(voice => voice.name.includes('Chinese') || voice.lang.includes('zh'));
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+      }
+      
+      // 播放语音
+      window.speechSynthesis.speak(utterance);
+      
+      // 模拟口型同步
+      simulateLipSyncDuringSpeech(utterance);
+    } else {
+      console.error('浏览器不支持 SpeechSynthesis API');
+    }
+  } catch (error) {
+    console.error('文字转语音错误:', error);
+  }
+}
+
+// 模拟语音播放时的口型同步
+function simulateLipSyncDuringSpeech(utterance: SpeechSynthesisUtterance) {
+  if (!currentModel) return;
+  
+  let animationId: number;
+  let isSpeaking = true;
+  
+  function updateMouth() {
+    if (!isSpeaking) {
+      // 语音播放完毕，闭嘴
+      if (currentModel.internalModel && currentModel.internalModel.coreModel && 
+          typeof currentModel.internalModel.coreModel.setParameterValueById === 'function') {
+        currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', 0);
+      } else if (typeof (currentModel as any).setParamValue === 'function') {
+        (currentModel as any).setParamValue('ParamMouthOpenY', 0);
+      }
+      return;
+    }
+    
+    // 模拟口型张合
+    const time = Date.now() / 200;
+    const mouthOpen = 0.3 + 0.7 * Math.sin(time) * Math.sin(time * 0.5);
+    
+    if (currentModel.internalModel && currentModel.internalModel.coreModel && 
+        typeof currentModel.internalModel.coreModel.setParameterValueById === 'function') {
+      currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', mouthOpen);
+    } else if (typeof (currentModel as any).setParamValue === 'function') {
+      (currentModel as any).setParamValue('ParamMouthOpenY', mouthOpen);
+    }
+    
+    animationId = requestAnimationFrame(updateMouth);
+  }
+  
+  // 开始模拟
+  updateMouth();
+  
+  // 语音播放结束时停止模拟
+  utterance.onend = () => {
+    isSpeaking = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+    }
   };
 }
 
@@ -426,6 +580,9 @@ function addMessageToChatLog(sender: 'user' | 'bot', text: string) {
     messageDiv.style.alignSelf = 'flex-start';
     messageDiv.style.textAlign = 'left';
     messageDiv.textContent = `看板娘: ${text}`;
+    
+    // 播放机器人回复的语音
+    textToSpeech(text);
   }
 
   chatLog.appendChild(messageDiv);

@@ -64,6 +64,18 @@
         <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center; margin-top: 8px;">
           <button id="localAudioTestBtn" style="padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; -webkit-app-region: no-drag;">播放本地语音测试口型</button>
         </div>
+        <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center; margin-top: 8px;">
+          <label for="voiceSelect">语音:</label>
+          <select id="voiceSelect" style="max-width: 220px; padding: 2px 6px; border-radius: 4px; border: none; outline: none; -webkit-app-region: no-drag;">
+            <option value="zh-CN-XiaoxiaoNeural">晓晓 (甜美)</option>
+            <option value="zh-CN-YunxiNeural">云希 (温柔)</option>
+            <option value="zh-CN-YunxiaNeural">云霞 (成熟)</option>
+            <option value="zh-CN-YunyangNeural">云阳 (活泼)</option>
+          </select>
+        </div>
+        <div style="display: inline-flex; gap: 8px; align-items: center; width: 100%; justify-content: center; margin-top: 8px;">
+          <button id="testAgentBtn" style="padding: 6px 12px; border-radius: 6px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; -webkit-app-region: no-drag;">测试 Agent 接口</button>
+        </div>
         
         <!-- 聊天交互区 -->
         <div style="display: flex; gap: 8px; align-items: center; width: 100%; margin-top: 8px; -webkit-app-region: no-drag;">
