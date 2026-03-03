@@ -1,5 +1,4 @@
 import * as PIXI from 'pixi.js';
-import { processChat } from './chatAgentService.js';
 
 // 将 PIXI 暴露到全局（给 pixi-live2d-display 用）
 (window as any).PIXI = PIXI;
@@ -366,6 +365,9 @@ function setupChatInterface() {
     });
   }
 
+  // 编辑界面相关
+  setupEditInterface();
+
   // 录音转文字功能
   let recognition: SpeechRecognition | null = null;
   let isRecording = false;
@@ -448,23 +450,35 @@ async function sendMessageToLLM(text: string) {
   addMessageToChatLog('user', text);
 
   try {
-    // 调用 processChat 函数处理用户输入
-    const result = await processChat(text);
+    // 简化发送逻辑，只发送 POST 请求，不等待返回结果
+    // OpenClaw 会通过 MCP 主动推送结果
+    const OPENCLAW_API = "http://127.0.0.1:18789";
+    const TOKEN = "my-super-secret-token-2025";
+
+    console.log('正在发送消息到 OpenClaw:', text);
     
-    // 打印表情到控制台
-    console.log('解析到的表情:', result.emotion);
-    
-    // 显示机器人回复
-    addMessageToChatLog('bot', result.pureText);
-    
-    // 触发 Live2D 表情
-    if (currentModel && typeof (currentModel as any).motion === 'function') {
-      (currentModel as any).motion(result.emotion);
+    const response = await fetch(`${OPENCLAW_API}/hooks/agent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${TOKEN}`,
+        'x-openclaw-agent-id': 'main'
+      },
+      body: JSON.stringify({
+        stream: false,
+        message: text,
+        name: "生活助手",
+        sessionKey: "live2d-pet"
+      })
+    });
+
+    if (response.ok) {
+      console.log('消息发送成功');
+    } else {
+      console.error('消息发送失败:', response.status);
     }
   } catch (error) {
-    console.error('发送消息到 LLM 失败:', error);
-    // 显示错误消息
-    addMessageToChatLog('bot', '哎呀，我好像断网了...');
+    console.error('发送消息到 OpenClaw 失败:', error);
   }
 }
 
@@ -587,6 +601,138 @@ function addMessageToChatLog(sender: 'user' | 'bot', text: string) {
 
   chatLog.appendChild(messageDiv);
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+// 编辑界面相关功能
+function setupEditInterface() {
+  const editBtn = document.getElementById('editBtn') as HTMLButtonElement | null;
+  const editModal = document.getElementById('editModal') as HTMLDivElement | null;
+  const cancelBtn = document.getElementById('cancelBtn') as HTMLButtonElement | null;
+  const saveBtn = document.getElementById('saveBtn') as HTMLButtonElement | null;
+  const faceSelect = document.getElementById('faceSelect') as HTMLSelectElement | null;
+  const actionSelect = document.getElementById('actionSelect') as HTMLSelectElement | null;
+
+  if (!editBtn || !editModal || !cancelBtn || !saveBtn || !faceSelect || !actionSelect) return;
+
+  // 打开编辑界面
+  editBtn.addEventListener('click', () => {
+    editModal.style.display = 'flex';
+    // 加载表情和动作列表
+    loadFaceAndActionList();
+  });
+
+  // 关闭编辑界面
+  cancelBtn.addEventListener('click', () => {
+    editModal.style.display = 'none';
+  });
+
+  // 保存按钮（暂时功能是关闭弹窗）
+  saveBtn.addEventListener('click', () => {
+    editModal.style.display = 'none';
+  });
+
+  // 点击弹窗外部关闭
+  editModal.addEventListener('click', (e) => {
+    if (e.target === editModal) {
+      editModal.style.display = 'none';
+    }
+  });
+
+  // 选择表情时自动播放
+  faceSelect.addEventListener('change', () => {
+    const selectedFace = faceSelect.value;
+    if (selectedFace && currentModel && typeof (currentModel as any).motion === 'function') {
+      (currentModel as any).motion(selectedFace);
+    }
+  });
+
+  // 选择动作时自动播放
+  actionSelect.addEventListener('change', () => {
+    const selectedAction = actionSelect.value;
+    if (selectedAction && currentModel && typeof (currentModel as any).motion === 'function') {
+      (currentModel as any).motion(selectedAction);
+    }
+  });
+
+  // 加载表情和动作列表
+  async function loadFaceAndActionList() {
+    if (!currentModel) {
+      console.error('当前没有加载模型');
+      faceSelect.innerHTML = '<option value="">请先加载模型</option>';
+      actionSelect.innerHTML = '<option value="">请先加载模型</option>';
+      return;
+    }
+
+    try {
+      // 尝试获取当前模型的路径
+      const modelPath = (currentModel as any).modelPath || MODEL_OPTIONS[0].path;
+      console.log('模型路径:', modelPath);
+      if (!modelPath) {
+        console.error('无法获取模型路径');
+        faceSelect.innerHTML = '<option value="">无法获取模型路径</option>';
+        actionSelect.innerHTML = '<option value="">无法获取模型路径</option>';
+        return;
+      }
+
+      // 加载 model3.json 文件
+      console.log('开始加载 model3.json:', modelPath);
+      const response = await fetch(modelPath);
+      console.log('响应状态:', response.status);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const modelData = await response.json();
+      console.log('模型数据:', JSON.stringify(modelData, null, 2));
+
+      // 清空下拉框
+      faceSelect.innerHTML = '';
+      actionSelect.innerHTML = '';
+
+      // 加载表情列表
+      console.log('Motions:', modelData.Motions);
+      console.log('Face data:', modelData.Motions?.Face);
+      if (modelData.FileReferences && modelData.FileReferences.Motions && modelData.FileReferences.Motions.Face) {
+        console.log('找到表情数据，数量:', modelData.FileReferences.Motions.Face.length);
+        modelData.FileReferences.Motions.Face.forEach((face: any) => {
+          const option = document.createElement('option');
+          option.value = 'Face';
+          option.textContent = face.File.split('/').pop()?.replace('.motion3.json', '') || '表情';
+          faceSelect.appendChild(option);
+        });
+      } else {
+        console.error('未找到表情数据');
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '无表情数据';
+        faceSelect.appendChild(option);
+      }
+
+      // 加载动作列表
+      console.log('Action data:', modelData.FileReferences?.Motions?.Action);
+      if (modelData.FileReferences && modelData.FileReferences.Motions && modelData.FileReferences.Motions.Action) {
+        console.log('找到动作数据，数量:', modelData.FileReferences.Motions.Action.length);
+        modelData.FileReferences.Motions.Action.forEach((action: any) => {
+          const option = document.createElement('option');
+          option.value = 'Action';
+          option.textContent = action.File.split('/').pop()?.replace('.motion3.json', '') || '动作';
+          actionSelect.appendChild(option);
+        });
+      } else {
+        console.error('未找到动作数据');
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '无动作数据';
+        actionSelect.appendChild(option);
+      }
+    } catch (error) {
+      console.error('加载表情和动作列表失败:', error);
+      // 添加默认选项
+      faceSelect.innerHTML = '<option value="">加载失败</option>';
+      actionSelect.innerHTML = '<option value="">加载失败</option>';
+    }
+  }
 }
 
 function initLive2D() {

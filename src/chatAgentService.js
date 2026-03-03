@@ -20,12 +20,10 @@ async function sendMessageToAgent(userInput) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${TOKEN}`,
-          // 如果你有多个 Agent，可以通过这个 Header 指定特定的 Agent ID，比如 'main'
-        'x-openclaw-agent-id': 'main' 
+        'x-openclaw-agent-id': 'main'
       },
-      body: JSON.stringify(
-        {
-            stream: false,     // false 表示不使用流式输出，等待完整结果一次性返回
+      body: JSON.stringify({
+        stream: false,     // false 表示不使用流式输出，等待完整结果一次性返回
         message: userInput,
         name: "生活助手",
         sessionKey: "live2d-pet"
@@ -40,10 +38,10 @@ async function sendMessageToAgent(userInput) {
     const data = await response.json();
     console.log('响应数据:', data);
     
-    // 第二步：如果有 runId，轮询获取结果
-    if (data.runId) {
-      return await pollForResult(data.runId);
-    }
+    // // 第二步：如果有 runId，轮询获取结果
+    // if (data.runId) {
+    //   return await pollForResult(data.runId);
+    // }
     
     return data;
   } catch (error) {
