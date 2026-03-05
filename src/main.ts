@@ -17,20 +17,13 @@ type SoundOption = {
   name: string;
   url: string;
 };
-
-// 当前 public 下已有的 .model3.json 列表
-const MODEL_OPTIONS: ModelOption[] = [
-  {
-    id: 'ele_a0',
-    name: 'Ele A0',
-    path: `${base}galgame/ele_a0/model.model3.json`,
-  },
-  {
+/*
+ {
     id: 'abeikelongbi_3',
     name: '阿贝克隆比 3',
     path: `${base}galgame/abeikelongbi_3/abeikelongbi_3.model3.json`,
   },
-  {
+   {
     id: 'zhaohe_3',
     name: '昭和 3',
     path: `${base}galgame/zhaohe_3/zhaohe_3.model3.json`,
@@ -39,6 +32,39 @@ const MODEL_OPTIONS: ModelOption[] = [
     id: 'ev_cg001_02s',
     name: 'CG 01',
     path: `${base}01/ev_cg001_02s.model3.json`,
+  },
+     {
+    id: 'ele_a1',
+    name: '鬼畜',
+    path: `${base}galgame/muna2/ailunsamuna_2.model3.json`,
+  },
+*/
+// 当前 public 下已有的 .model3.json 列表
+const MODEL_OPTIONS: ModelOption[] = [
+  {
+    id: 'ele_a0',
+    name: '美奈子',
+    path: `${base}galgame/ele_a0/model.model3.json`,
+  },
+  {
+    id: 'ele_a1',
+    name: '小美',
+    path: `${base}galgame/miro_miko/mori_miko.model3.json`,
+  },
+  {
+    id: 'ele_a1',
+    name: '亚美',
+    path: `${base}galgame/ruri_miko/ruri_miko.model3.json`,
+  },
+    {
+    id: 'ele_a1',
+    name: '明美',
+    path: `${base}galgame/mori_suit/mori_suit.model3.json`,
+  },
+    {
+    id: 'ele_a6',
+    name: '真琴',
+    path: `${base}galgame/ele_b4//model.model3.json`,
   },
 ];
 
@@ -65,6 +91,7 @@ let app: PIXI.Application | null = null;
 let currentModel: any = null;
 let Live2DModelCtor: any = null;
 let currentAudio: HTMLAudioElement | null = null;
+let currentModelPath: string = '';
 
 async function ensureLive2D() {
   if (!Live2DModelCtor) {
@@ -139,11 +166,64 @@ async function loadModel(path: string) {
 
     app.stage.addChild(model as any);
     currentModel = model;
+    currentModelPath = path;
     (window as any).live2dModel = model;
 
     console.log('Live2D 模型加载成功！');
   } catch (error) {
     console.error('加载模型失败:', error);
+  }
+}
+
+async function getAllMotionGroupsFromModel(modelPath: string): Promise<string[]> {
+  try {
+    const response = await fetch(modelPath);
+    if (!response.ok) {
+      console.error('无法加载模型配置文件:', response.status);
+      return [];
+    }
+    
+    const modelData = await response.json();
+    const motionGroups: string[] = [];
+    
+    if (modelData.FileReferences?.Motions) {
+      const motions = modelData.FileReferences.Motions;
+      for (const groupName in motions) {
+        const group = motions[groupName];
+        if (Array.isArray(group) && group.length > 0) {
+          motionGroups.push(groupName);
+        }
+      }
+    }
+    
+    console.log('找到动作组:', motionGroups);
+    return motionGroups;
+  } catch (error) {
+    console.error('读取模型动作失败:', error);
+    return [];
+  }
+}
+
+async function playRandomMotion() {
+  if (!currentModel || !currentModelPath) {
+    console.warn('没有加载模型，无法播放动作');
+    return;
+  }
+  
+  const motionGroups = await getAllMotionGroupsFromModel(currentModelPath);
+  
+  if (motionGroups.length === 0) {
+    console.warn('模型没有可用的动作组');
+    return;
+  }
+  
+  const randomIndex = Math.floor(Math.random() * motionGroups.length);
+  const randomGroup = motionGroups[randomIndex];
+  
+  console.log('随机播放动作组:', randomGroup);
+  
+  if (typeof (currentModel as any).motion === 'function') {
+    (currentModel as any).motion(randomGroup);
   }
 }
 
@@ -270,14 +350,17 @@ function playAudioWithLipSync(audioUrl: string) {
     }
     const average = sum / dataArray.length;
     const volumeValue = Math.min(average / 255, 1);
+    
+    // 增加嘴巴张合幅度倍数，让口型更明显
+    const mouthAmplitude = Math.min(volumeValue * 2.5, 1);
 
     // 核心：强行设置模型嘴巴的张合度
     if (currentModel.internalModel && currentModel.internalModel.coreModel && 
         typeof currentModel.internalModel.coreModel.setParameterValueById === 'function') {
-      currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', volumeValue);
+      currentModel.internalModel.coreModel.setParameterValueById('ParamMouthOpenY', mouthAmplitude);
     } else if (typeof (currentModel as any).setParamValue === 'function') {
       // 备选方案：使用 setParamValue
-      (currentModel as any).setParamValue('ParamMouthOpenY', volumeValue);
+      (currentModel as any).setParamValue('ParamMouthOpenY', mouthAmplitude);
     }
 
     if (!audio.paused) {
@@ -353,16 +436,41 @@ function setupChatInterface() {
   // 监听 OpenClaw 消息
   if (typeof window.electronAPI !== 'undefined' && window.electronAPI.onOpenClawMessage) {
     window.electronAPI.onOpenClawMessage((message: string) => {
-      console.log('收到 OpenClaw 消息:', message);
+      console.log('========== 收到 OpenClaw MCP 消息 ==========');
+      console.log('原始消息:', message);
+      console.log('消息类型:', typeof message);
+      console.log('消息长度:', message.length);
+      
       // 解析消息，提取情感标签和纯文本
       const { emotion, cleanText } = parseEmotionFromText(message);
-      // 显示机器人回复
+      console.log('解析结果 - 情感:', emotion);
+      console.log('解析结果 - 纯文本:', cleanText);
+      
+      // 显示机器人回复到聊天记录
       addMessageToChatLog('bot', cleanText);
-      // 触发 Live2D 表情
-      if (currentModel && typeof (currentModel as any).motion === 'function') {
-        (currentModel as any).motion(emotion);
+      
+      // 显示机器人回复到聊天气泡
+      if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+        window.writerInstance.type(cleanText);
+      } else {
+        // 如果writerInstance还未初始化，等待一下再尝试
+        setTimeout(() => {
+          if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+            window.writerInstance.type(cleanText);
+          } else {
+            console.warn('writerInstance 未初始化，无法显示消息到聊天气泡');
+          }
+        }, 100);
       }
+      
+      // 播放随机动作
+      playRandomMotion();
+      
+      console.log('========================================');
     });
+  } else {
+    console.warn('⚠️ window.electronAPI 或 onOpenClawMessage 未定义');
+    console.log('window.electronAPI:', window.electronAPI);
   }
 
   // 编辑界面相关
@@ -455,7 +563,20 @@ async function sendMessageToLLM(text: string) {
     const OPENCLAW_API = "http://127.0.0.1:18789";
     const TOKEN = "my-super-secret-token-2025";
 
-    console.log('正在发送消息到 OpenClaw:', text);
+    console.log('========== OpenClaw 消息发送详情 ==========');
+    console.log('API 地址:', OPENCLAW_API);
+    console.log('Token:', TOKEN);
+    console.log('发送的消息:', text);
+    console.log('Agent ID:', 'main');
+    console.log('Session Key:', 'live2d-pet');
+    
+    const requestBody = {
+      stream: false,
+      message: text,
+      name: "生活助手",
+      sessionKey: "live2d-pet"
+    };
+    console.log('请求体:', JSON.stringify(requestBody, null, 2));
     
     const response = await fetch(`${OPENCLAW_API}/hooks/agent`, {
       method: 'POST',
@@ -464,22 +585,79 @@ async function sendMessageToLLM(text: string) {
         'Authorization': `Bearer ${TOKEN}`,
         'x-openclaw-agent-id': 'main'
       },
-      body: JSON.stringify({
-        stream: false,
-        message: text,
-        name: "生活助手",
-        sessionKey: "live2d-pet"
-      })
+      body: JSON.stringify(requestBody)
     });
 
+    console.log('响应状态:', response.status, response.statusText);
+    console.log('响应头:', Object.fromEntries(response.headers.entries()));
+
     if (response.ok) {
+      const responseData = await response.json();
+      
+      // 以 HTML 格式打印响应数据
+      console.log('%c========== OpenClaw 响应数据 (HTML 格式) ==========', 'color: #00ff00; font-weight: bold; font-size: 14px;');
+      console.log('%c' + formatResponseAsHTML(responseData), 'font-family: monospace; font-size: 12px;');
+      
+      if (responseData.runId) {
+        console.log('%c✅ 成功获取 runId: ' + responseData.runId, 'color: #00ff00; font-weight: bold;');
+      } else {
+        console.warn('%c⚠️ 响应中没有 runId', 'color: #ffaa00; font-weight: bold;');
+      }
+      
       console.log('消息发送成功');
     } else {
-      console.error('消息发送失败:', response.status);
+      const errorText = await response.text();
+      console.error('%c❌ 消息发送失败: ' + response.status + ' ' + response.statusText, 'color: #ff0000; font-weight: bold; font-size: 14px;');
+      console.error('%c错误响应内容: ' + errorText, 'color: #ff0000; font-family: monospace;');
     }
+    console.log('========================================');
   } catch (error) {
-    console.error('发送消息到 OpenClaw 失败:', error);
+    console.error('%c❌ 发送消息到 OpenClaw 失败:', 'color: #ff0000; font-weight: bold; font-size: 14px;');
+    console.error('%c错误详情:', 'color: #ff0000;', error);
+    console.log('========================================');
   }
+}
+
+// 格式化响应数据为 HTML
+function formatResponseAsHTML(data: any): string {
+  let html = '<div style="background: #f0f0f0; padding: 10px; border-radius: 5px; border: 1px solid #ccc;">';
+  
+  // runId
+  if (data.runId) {
+    html += '<div style="margin-bottom: 10px;">';
+    html += '<strong style="color: #0066cc;">runId:</strong> ';
+    html += '<span style="background: #e6f3ff; padding: 2px 6px; border-radius: 3px; font-family: monospace;">' + data.runId + '</span>';
+    html += '</div>';
+  }
+  
+  // status
+  if (data.status) {
+    html += '<div style="margin-bottom: 10px;">';
+    html += '<strong style="color: #0066cc;">status:</strong> ';
+    html += '<span style="color: ' + (data.status === 'success' ? '#00aa00' : '#ff6600') + ';">' + data.status + '</span>';
+    html += '</div>';
+  }
+  
+  // message
+  if (data.message) {
+    html += '<div style="margin-bottom: 10px;">';
+    html += '<strong style="color: #0066cc;">message:</strong> ';
+    html += '<span style="background: #fff3cd; padding: 2px 6px; border-radius: 3px;">' + data.message + '</span>';
+    html += '</div>';
+  }
+  
+  // 其他字段
+  for (const key in data) {
+    if (key !== 'runId' && key !== 'status' && key !== 'message') {
+      html += '<div style="margin-bottom: 5px;">';
+      html += '<strong style="color: #666;">' + key + ':</strong> ';
+      html += '<span style="color: #333;">' + JSON.stringify(data[key]) + '</span>';
+      html += '</div>';
+    }
+  }
+  
+  html += '</div>';
+  return html;
 }
 
 // 解析表情标签的函数
@@ -505,15 +683,48 @@ let currentVoice = 'zh-CN-XiaoxiaoNeural'; // 默认语音
 
 async function textToSpeech(text: string) {
   try {
-    // 尝试使用浏览器内置的 SpeechSynthesis API
     if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(text);
       
-      // 设置语音
+      // 优化语音参数，让声音更萌、更年轻
+      utterance.rate = 1.15; // 语速：稍快一点，更活泼
+      utterance.pitch = 1.25; // 音调：提高音调，让声音更年轻、更萌
+      utterance.volume = 1.0; // 音量：0-1
+      
+      // 设置语音 - 优先选择更萌的语音
       const voices = window.speechSynthesis.getVoices();
-      const selectedVoice = voices.find(voice => voice.name.includes('Chinese') || voice.lang.includes('zh'));
+      
+      // 优先级顺序：优先选择年轻、可爱的语音
+      const preferredVoices = [
+        'zh-CN-XiaoxiaoNeural',      // 晓晓 - 年轻女声，最推荐
+        'zh-CN-XiaoyiNeural',       // 晓怡 - 年轻女声
+        'zh-CN-XiaohanNeural',       // 晓涵 - 年轻女声
+        'zh-CN-Xiaoxiao',            // 晓晓（非Neural）
+        'zh-CN-YunxiNeural',         // 云希 - 年轻女声
+        'zh-CN-XiaoxiaoNeural',      // 重复确保匹配
+        'Microsoft Huihui',           // 慧慧 - 中年女声（备用）
+        'Microsoft Yaoyao'            // 瑶瑶 - 中年女声（备用）
+      ];
+      
+      let selectedVoice = null;
+      for (const voiceName of preferredVoices) {
+        selectedVoice = voices.find(voice => 
+          voice.name === voiceName || 
+          voice.name.includes(voiceName) ||
+          voice.lang.includes('zh')
+        );
+        if (selectedVoice) break;
+      }
+      
+      // 如果没找到，使用第一个中文语音
+      if (!selectedVoice) {
+        selectedVoice = voices.find(voice => voice.lang.includes('zh'));
+      }
+      
       if (selectedVoice) {
         utterance.voice = selectedVoice;
+        console.log('使用语音:', selectedVoice.name);
+        console.log('语音参数 - 语速:', utterance.rate, '音调:', utterance.pitch);
       }
       
       // 播放语音

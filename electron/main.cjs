@@ -11,34 +11,67 @@ let mainWindow = null;
 
 // MCP server 处理工具调用
 function handleMcpRequest(body) {
+  console.log('========== MCP 请求详情 ==========');
+  console.log('请求方法:', body.method);
+  console.log('请求参数:', JSON.stringify(body.params, null, 2));
+  
   const { method, params } = body;
   
   if (method === 'tools/call' && params.name === 'send_to_pet') {
+    console.log('✅ 识别到 send_to_pet 工具调用');
+    console.log('要发送的消息:', params.arguments.text);
+    
     // 通过 IPC 发送到渲染进程
     if (mainWindow) {
+      console.log('✅ 发送 IPC 消息到渲染进程');
       mainWindow.webContents.send('openclaw-message', params.arguments.text);
+    } else {
+      console.error('❌ mainWindow 未定义，无法发送 IPC 消息');
     }
+    
+    console.log('========================================');
     return { content: [{ type: 'text', text: 'OK' }] };
   }
   
+  console.log('⚠️ 未知的请求方法:', method);
+  console.log('========================================');
   return { error: 'Unknown method' };
 }
 
 // HTTP MCP 端点
 const server = http.createServer((req, res) => {
+  console.log('========== 收到 HTTP 请求 ==========');
+  console.log('请求方法:', req.method);
+  console.log('请求 URL:', req.url);
+  console.log('请求头:', JSON.stringify(req.headers, null, 2));
+  
   if (req.method === 'POST' && req.url === '/mcp') {
     let body = '';
-    req.on('data', chunk => body += chunk);
+    req.on('data', chunk => {
+      body += chunk;
+      console.log('接收数据块，当前长度:', body.length);
+    });
     req.on('end', () => {
+      console.log('请求体:', body);
       try {
-        const result = handleMcpRequest(JSON.parse(body));
+        const parsedBody = JSON.parse(body);
+        console.log('解析后的请求体:', JSON.stringify(parsedBody, null, 2));
+        
+        const result = handleMcpRequest(parsedBody);
+        console.log('MCP 响应:', JSON.stringify(result, null, 2));
         res.end(JSON.stringify(result));
       } catch (error) {
-        console.error('MCP 请求处理错误:', error);
+        console.error('❌ MCP 请求处理错误:', error);
+        console.error('错误堆栈:', error.stack);
         res.end(JSON.stringify({ error: 'Invalid request' }));
       }
     });
+  } else {
+    console.log('⚠️ 请求不匹配，返回 404');
+    res.statusCode = 404;
+    res.end('Not Found');
   }
+  console.log('========================================');
 });
 
 server.listen(MCP_PORT);
