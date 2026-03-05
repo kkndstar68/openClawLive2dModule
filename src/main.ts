@@ -1,4 +1,5 @@
 import * as PIXI from 'pixi.js';
+import { openClawWebSocket } from './websocket';
 
 // 将 PIXI 暴露到全局（给 pixi-live2d-display 用）
 (window as any).PIXI = PIXI;
@@ -558,12 +559,24 @@ async function sendMessageToLLM(text: string) {
   addMessageToChatLog('user', text);
 
   try {
-    // 简化发送逻辑，只发送 POST 请求，不等待返回结果
-    // OpenClaw 会通过 MCP 主动推送结果
+    // 优先使用 WebSocket 发送消息
+    if (openClawWebSocket.isConnected()) {
+      console.log('========== OpenClaw WebSocket 消息发送 ==========');
+      console.log('发送的消息:', text);
+      console.log('Session Key:', 'main');
+      
+      openClawWebSocket.sendMessage(text, 'main');
+      console.log('WebSocket 消息发送成功');
+      console.log('========================================');
+      return;
+    }
+
+    // 如果 WebSocket 未连接，使用 HTTP 请求作为备用
+    console.log('WebSocket 未连接，使用 HTTP 请求作为备用');
     const OPENCLAW_API = "http://127.0.0.1:18789";
     const TOKEN = "my-super-secret-token-2025";
 
-    console.log('========== OpenClaw 消息发送详情 ==========');
+    console.log('========== OpenClaw HTTP 消息发送详情 ==========');
     console.log('API 地址:', OPENCLAW_API);
     console.log('Token:', TOKEN);
     console.log('发送的消息:', text);
@@ -950,10 +963,64 @@ function initLive2D() {
   setupModelSelector();
   setupSoundSelector();
   setupChatInterface();
+  // 初始化 WebSocket 连接
+  initWebSocket();
   // 如果没有下拉框（例如纯网页嵌入），也加载一个默认模型
   if (!document.getElementById('modelSelect') && MODEL_OPTIONS.length > 0) {
     void loadModel(MODEL_OPTIONS[0].path);
   }
+}
+
+// 初始化 WebSocket 连接
+function initWebSocket() {
+  console.log('正在连接到 OpenClaw Gateway...');
+  openClawWebSocket.connect().then(success => {
+    if (success) {
+      console.log('WebSocket 连接成功');
+    } else {
+      console.warn('WebSocket 连接失败，将继续使用 MCP 接口');
+    }
+  });
+
+  // 监听 WebSocket 消息
+  openClawWebSocket.on('message', (text) => {
+    console.log('收到 OpenClaw WebSocket 消息:', text);
+    if (text) {
+      // 显示机器人回复到聊天记录
+      addMessageToChatLog('bot', text);
+      // 显示机器人回复到聊天气泡
+      if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+        window.writerInstance.type(text);
+      } else {
+        // 如果writerInstance还未初始化，等待一下再尝试
+        setTimeout(() => {
+          if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+            window.writerInstance.type(text);
+          } else {
+            console.warn('writerInstance 未初始化，无法显示消息到聊天气泡');
+          }
+        }, 100);
+      }
+      // 播放机器人回复的语音
+      textToSpeech(text);
+      // 播放随机动作
+      playRandomMotion();
+    }
+  });
+
+  // 监听流式消息（可选，用于实时打字效果）
+  openClawWebSocket.on('stream', (text) => {
+    console.log('收到流式消息:', text);
+    // 这里可以实现实时打字效果，暂时注释掉
+    // if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+    //   window.writerInstance.type(text);
+    // }
+  });
+
+  // 监听连接状态
+  openClawWebSocket.on('connected', () => {
+    console.log('WebSocket 连接已建立');
+  });
 }
 
 initLive2D();
