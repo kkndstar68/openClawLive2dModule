@@ -4,6 +4,9 @@ import { openClawWebSocket } from './websocket';
 // 将 PIXI 暴露到全局（给 pixi-live2d-display 用）
 (window as any).PIXI = PIXI;
 
+// 声明全局 echarts 变量（来自CDN）
+declare const echarts: any;
+
 // 使用 base 以支持 Electron 打包后 file:// 加载
 const base = import.meta.env.BASE_URL || '/';
 
@@ -474,6 +477,43 @@ function setupChatInterface() {
     console.log('window.electronAPI:', window.electronAPI);
   }
 
+  // 监听股票推送消息
+  if (typeof window.electronAPI !== 'undefined' && window.electronAPI.onStockPush) {
+    window.electronAPI.onStockPush((message: { type: string; text: string; emotion?: string }) => {
+      console.log('========== 收到股票推送消息 ==========');
+      console.log('推送消息:', message);
+      
+      const { text, emotion } = message;
+      
+      // 显示到聊天记录
+      addMessageToChatLog('bot', text);
+      
+      // 显示到聊天气泡
+      if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+        window.writerInstance.type(text);
+      } else {
+        setTimeout(() => {
+          if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+            window.writerInstance.type(text);
+          }
+        }, 100);
+      }
+      
+      // TTS 语音播报
+      textToSpeech(text);
+      
+      // 播放随机动作
+      playRandomMotion();
+      
+      // 根据情感触发对应表情/动作
+      if (emotion) {
+        handleEmotion(emotion);
+      }
+      
+      console.log('========================================');
+    });
+  }
+
   // 编辑界面相关
   setupEditInterface();
 
@@ -693,6 +733,31 @@ function parseEmotionFromText(text: string) {
 
 // 文字转语音功能
 let currentVoice = 'zh-CN-XiaoxiaoNeural'; // 默认语音
+
+// 处理情感，触发对应表情/动作
+function handleEmotion(emotion: string) {
+  if (!currentModel) {
+    console.warn('没有加载模型，无法触发情感动作');
+    return;
+  }
+  
+  console.log('触发情感动作:', emotion);
+  
+  const emotionMotionMap: Record<string, string> = {
+    'excited': 'Action',
+    'happy': 'Action',
+    'surprised': 'Action',
+    'warning': 'Action',
+    'neutral': 'Idle'
+  };
+  
+  const motionGroup = emotionMotionMap[emotion.toLowerCase()] || 'Action';
+  
+  if (typeof (currentModel as any).motion === 'function') {
+    (currentModel as any).motion(motionGroup);
+    console.log('播放情感动作组:', motionGroup);
+  }
+}
 
 async function textToSpeech(text: string) {
   try {
@@ -959,10 +1024,1509 @@ function setupEditInterface() {
   }
 }
 
+// ============================================================
+// 股票监控功能
+// ============================================================
+
+// 股票数据缓存
+let stockPrices: Record<string, any> = {};
+let holdings: any[] = [];
+let candidates: any[] = [];
+let selectedStockCode: string | null = null;
+let alertCooldown: Record<string, number> = {};
+let refreshInterval = 10000; // 默认刷新间隔10秒
+let refreshTimer: number | null = null; // 刷新定时器
+let candidateFilterType: string = 'today'; // 股票池筛选类型: 'today' | 'all'
+
+// 打开股票监控弹窗
+function openStockMonitor() {
+  const modal = document.getElementById('stockMonitorModal');
+  if (modal) {
+    modal.style.display = 'flex';
+    // 立即刷新数据
+    refreshStockData();
+  }
+}
+
+// 关闭股票监控弹窗
+function closeStockMonitor() {
+  const modal = document.getElementById('stockMonitorModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+// 打开添加股票弹窗
+function openAddStockModal() {
+  const modal = document.getElementById('addStockModal');
+  if (modal) {
+    // 清空输入
+    (document.getElementById('stockCodeInput') as HTMLInputElement).value = '';
+    (document.getElementById('stockNameInput') as HTMLInputElement).value = '';
+    (document.getElementById('buyPoint1Input') as HTMLInputElement).value = '';
+    (document.getElementById('buyPoint2Input') as HTMLInputElement).value = '';
+    (document.getElementById('stopLossInput') as HTMLInputElement).value = '';
+    (document.getElementById('takeProfitInput') as HTMLInputElement).value = '';
+    (document.getElementById('costPriceInput') as HTMLInputElement).value = '';
+    (document.getElementById('sharesInput') as HTMLInputElement).value = '';
+    modal.style.display = 'flex';
+  }
+}
+
+// 关闭添加股票弹窗
+function closeAddStockModal() {
+  const modal = document.getElementById('addStockModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+// 查询股票信息
+async function searchStock(code: string) {
+  if (!code || code.length !== 6) {
+    alert('请输入6位股票代码');
+    return;
+  }
+  
+  const prefix = code.startsWith('6') ? 'sh' : 'sz';
+  const url = `http://qt.gtimg.cn/q=${prefix}${code}`;
+  
+  try {
+    const response = await fetch(url);
+    // 使用arrayBuffer来正确解码GBK编码
+    const buffer = await response.arrayBuffer();
+    const text = new TextDecoder('GBK').decode(buffer);
+    
+    const match = text.match(/v_(s[hz]\d{6})="(.+?)";/);
+    if (match) {
+      const parts = match[2].split('~');
+      if (parts.length >= 2) {
+        (document.getElementById('stockNameInput') as HTMLInputElement).value = parts[1];
+        // 同时填充价格到买点参考
+        if (parts.length >= 4) {
+          const price = parseFloat(parts[3]);
+          if (price) {
+            (document.getElementById('buyPoint1Input') as HTMLInputElement).value = (price * 0.98).toFixed(2);
+            (document.getElementById('stopLossInput') as HTMLInputElement).value = (price * 0.95).toFixed(2);
+            (document.getElementById('costPriceInput') as HTMLInputElement).value = price.toFixed(2);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('查询股票失败:', error);
+    alert('查询失败，请检查网络');
+  }
+}
+
+// 刷新股票数据
+async function refreshStockData() {
+  console.log('[股票监控] ========== 开始刷新股票数据 ==========');
+  // 更新时间
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  (document.getElementById('updateTime') as HTMLElement).textContent = timeStr;
+  console.log('[股票监控] 更新时间:', timeStr);
+  
+  // 获取指数数据
+  console.log('[股票监控] 开始获取指数数据...');
+  await fetchIndexData();
+  console.log('[股票监控] 指数数据获取完成');
+  
+  // 获取股票数据
+  console.log('[股票监控] 开始获取股票数据...');
+  await fetchStockData();
+  console.log('[股票监控] 股票数据获取完成');
+  
+  // 更新列表
+  console.log('[股票监控] holdings数组长度:', holdings.length);
+  console.log('[股票监控] candidates数组长度:', candidates.length);
+  console.log('[股票监控] stockPrices对象键数量:', Object.keys(stockPrices).length);
+  
+  console.log('[股票监控] 开始渲染选股池...');
+  renderCandidates();
+  console.log('[股票监控] 选股池渲染完成');
+  
+  console.log('[股票监控] 开始渲染持仓...');
+  renderHoldings();
+  console.log('[股票监控] 持仓渲染完成');
+  
+  console.log('[股票监控] ========== 刷新股票数据结束 ==========');
+}
+
+// 获取指数数据
+async function fetchIndexData() {
+  try {
+    const url = 'http://qt.gtimg.cn/q=sh000001,sz399001,sz399006';
+    const response = await fetch(url);
+    const buffer = await response.arrayBuffer();
+    const text = new TextDecoder('GBK').decode(buffer);
+    
+    const matches = text.match(/v_(s[hz]\d{6})="(.+?)";/g) || [];
+    matches.forEach(match => {
+      const innerMatch = match.match(/v_(s[hz]\d{6})="(.+?)";/);
+      if (innerMatch) {
+        const parts = innerMatch[2].split('~');
+        if (parts.length >= 4) {
+          const code = innerMatch[1];
+          const price = parseFloat(parts[3]);
+          const change = parseFloat(parts[32]);
+          
+          if (code === 'sh000001') {
+            (document.getElementById('shIndex') as HTMLElement).textContent = price.toFixed(2);
+            (document.getElementById('shChange') as HTMLElement).textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+            (document.getElementById('shChange') as HTMLElement).style.color = change >= 0 ? '#ef4444' : '#22c55e';
+            (document.getElementById('shIndex') as HTMLElement).style.color = change >= 0 ? '#ef4444' : '#22c55e';
+          } else if (code === 'sz399001') {
+            (document.getElementById('szIndex') as HTMLElement).textContent = price.toFixed(2);
+            (document.getElementById('szChange') as HTMLElement).textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+            (document.getElementById('szChange') as HTMLElement).style.color = change >= 0 ? '#22c55e' : '#ef4444';
+            (document.getElementById('szIndex') as HTMLElement).style.color = change >= 0 ? '#22c55e' : '#ef4444';
+          } else if (code === 'sz399006') {
+            (document.getElementById('cyIndex') as HTMLElement).textContent = price.toFixed(2);
+            (document.getElementById('cyChange') as HTMLElement).textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+            (document.getElementById('cyChange') as HTMLElement).style.color = change >= 0 ? '#3b82f6' : '#ef4444';
+            (document.getElementById('cyIndex') as HTMLElement).style.color = change >= 0 ? '#3b82f6' : '#ef4444';
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error('获取指数数据失败:', error);
+  }
+}
+
+// 从后端API获取持仓数据
+async function fetchHoldingsFromAPI(): Promise<void> {
+  try {
+    console.log('[股票监控] 开始调用API: /api/holdings');
+    const response = await fetch('http://127.0.0.1:8765/api/holdings');
+    console.log('[股票监控] API响应状态:', response.status);
+    const result = await response.json();
+    console.log('[股票监控] API返回数据:', JSON.stringify(result));
+    if (result.data) {
+      // 过滤出当前持仓（status为'当前持仓'或未设置的）
+      holdings = result.data.filter((h: any) => h.status !== '已卖出').map((h: any) => ({
+        code: h.code,
+        name: h.name,
+        cost: h.cost || h.buy_price,
+        shares: h.shares,
+        stop_loss: h.stop_loss,
+        take_profit: h.take_profit,
+        status: h.status || 'holding'
+      }));
+      console.log('[股票监控] 从API获取持仓:', holdings.length, '只');
+      console.log('[股票监控] 持仓详情:', JSON.stringify(holdings));
+    } else {
+      console.log('[股票监控] API返回数据为空');
+    }
+  } catch (error) {
+    console.error('[股票监控] 获取持仓失败:', error);
+    console.error('[股票监控] 错误详情:', (error as Error).message);
+  }
+}
+
+// 从后端API获取选股池数据
+async function fetchCandidatesFromAPI(filter: string = 'today'): Promise<void> {
+  try {
+    console.log('[股票监控] 开始调用API: /api/candidates, 筛选类型:', filter);
+    const url = filter === 'all' ? 'http://127.0.0.1:8765/api/candidates?filter=all' : 'http://127.0.0.1:8765/api/candidates';
+    const response = await fetch(url);
+    console.log('[股票监控] API响应状态:', response.status);
+    const result = await response.json();
+    console.log('[股票监控] API返回数据:', JSON.stringify(result));
+    if (result.data) {
+      candidates = result.data.map((c: any) => ({
+        code: c.code,
+        name: c.name,
+        buy_point_1: c.buy_point_1,
+        buy_point_2: c.buy_point_2,
+        stop_loss: c.stop_loss,
+        take_profit: c.take_profit,
+        notes: c.notes,
+        date: c.date
+      }));
+      console.log('[股票监控] 从API获取选股池:', candidates.length, '只, 筛选类型:', filter);
+    } else {
+      console.log('[股票监控] API返回数据为空');
+    }
+  } catch (error) {
+    console.error('[股票监控] 获取选股池失败:', error);
+    console.error('[股票监控] 错误详情:', (error as Error).message);
+  }
+}
+
+// 获取股票实时数据
+async function fetchStockData() {
+  // 先从API获取持仓和选股池数据
+  await fetchHoldingsFromAPI();
+  await fetchCandidatesFromAPI(candidateFilterType);
+  
+  const allCodes: string[] = [];
+  
+  // 收集代码（带前缀）
+  holdings.forEach(h => {
+    const prefix = h.code.startsWith('6') ? 'sh' : 'sz';
+    allCodes.push(`${prefix}${h.code}`);
+  });
+  
+  candidates.forEach(c => {
+    const prefix = c.code.startsWith('6') ? 'sh' : 'sz';
+    allCodes.push(`${prefix}${c.code}`);
+  });
+  
+  if (allCodes.length === 0) {
+    console.log('[股票监控] 没有股票数据需要获取');
+    return;
+  }
+  
+  console.log('[股票监控] 正在获取', allCodes.length, '只股票数据...');
+  
+  try {
+    const url = `http://qt.gtimg.cn/q=${allCodes.join(',')}`;
+    console.log('[股票监控] 请求URL:', url);
+    
+    const response = await fetch(url);
+    console.log('[股票监控] 响应状态:', response.status);
+    
+    const buffer = await response.arrayBuffer();
+    const text = new TextDecoder('GBK').decode(buffer);
+    console.log('[股票监控] 响应长度:', text.length, '字符');
+    
+    // 使用临时对象存储新数据，避免清空旧数据
+    const newStockPrices: Record<string, any> = {};
+    const matches = text.match(/v_(s[hz]\d{6})="(.+?)";/g) || [];
+    
+    console.log('[股票监控] 解析到', matches.length, '条股票数据');
+    
+    matches.forEach(match => {
+      const innerMatch = match.match(/v_(s[hz]\d{6})="(.+?)";/);
+      if (innerMatch) {
+        const parts = innerMatch[2].split('~');
+        if (parts.length >= 40) {
+          const code = parts[2]; // 不带前缀的股票代码
+          newStockPrices[code] = {
+            name: parts[1],
+            price: parseFloat(parts[3]) || 0,
+            prevClose: parseFloat(parts[4]) || 0,
+            change: parseFloat(parts[32]) || 0,
+            high: parseFloat(parts[33]) || 0,
+            low: parseFloat(parts[34]) || 0,
+            turnover: parseFloat(parts[38]) || 0,
+            volumeRatio: parseFloat(parts[49]) || 0,
+          };
+          console.log('[股票监控]', code, '-', parts[1], '- 现价:', parts[3], '- 涨幅:', parts[32]);
+        }
+      }
+    });
+    
+    // 只有成功获取到数据时才更新缓存
+    if (Object.keys(newStockPrices).length > 0) {
+      stockPrices = newStockPrices;
+      console.log('[股票监控] 成功更新', Object.keys(stockPrices).length, '只股票数据');
+    } else {
+      console.warn('[股票监控] 未获取到有效数据，保留缓存');
+    }
+    
+  } catch (error) {
+    console.error('[股票监控] 获取数据失败:', error);
+    // 失败时不清除原有数据
+  }
+}
+
+// 渲染选股池
+function renderCandidates() {
+  const container = document.getElementById('candidateList');
+  if (!container) return;
+  
+  if (candidates.length === 0) {
+    container.innerHTML = '<div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">暂无选股数据</div>';
+    (document.getElementById('candidateCount') as HTMLElement).textContent = '(0只)';
+    return;
+  }
+  
+  (document.getElementById('candidateCount') as HTMLElement).textContent = `(${candidates.length}只)`;
+  
+  container.innerHTML = candidates.map(c => {
+    const price = stockPrices[c.code]?.price || 0;
+    const change = stockPrices[c.code]?.change || 0;
+    const bp1 = c.buy_point_1 || 0;
+    const bp2 = c.buy_point_2 || 0;
+    const sl = c.stop_loss || 0;
+    
+    // 计算距离买点的百分比
+    let dist1 = 0;
+    if (bp1 > 0) {
+      dist1 = ((price - bp1) / bp1 * 100);
+    }
+    
+    // 状态灯判断（按优先级排序）
+    let statusLight = '⚪';
+    let alertClass = '';
+    let isLimitUp = change >= 9.9; // 涨停判断
+    
+    // 检查涨停状态
+    if (isLimitUp) {
+      statusLight = '🔒';
+    } else if (sl > 0 && price <= sl) {
+      statusLight = '🔴';
+      alertClass = 'alert-danger';
+    } else if (price <= bp1 * 1.01 && bp1 > 0) {
+      statusLight = '🟢';
+      alertClass = 'alert-success';
+      // 触发买点告警
+      checkCandidateAlert(c, price);
+    } else if (bp2 > 0 && bp1 > 0 && price > bp1 && price <= bp2) {
+      statusLight = '🟡';
+    }
+    
+    const isSelected = selectedStockCode === c.code;
+    
+    return `
+      <div class="stock-row ${alertClass} ${isSelected ? 'selected' : ''}" onclick="selectStock('${c.code}')" data-code="${c.code}" data-type="candidate">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 14px;">${statusLight}</span>
+            <span style="color: #fff; font-size: 14px; font-weight: 500;">${c.name}</span>
+            <span style="color: rgba(255,255,255,0.5); font-size: 12px;">(${c.code})</span>
+            ${isLimitUp ? '<span style="color: #ef4444; font-size: 12px; font-weight: bold;">涨停</span>' : ''}
+          </div>
+          <div style="text-align: right;">
+            <span style="color: ${change >= 0 ? '#ef4444' : '#22c55e'}; font-size: 14px; font-weight: 600;">${price.toFixed(2)}</span>
+            <span style="color: ${change >= 0 ? '#ef4444' : '#22c55e'}; font-size: 12px; margin-left: 4px;">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span>
+          </div>
+        </div>
+        <div style="margin-top: 4px; font-size: 12px; color: rgba(255,255,255,0.6);">
+          买点1 ${bp1.toFixed(2)} (${dist1 >= 0 ? '+' : ''}${dist1.toFixed(1)}%)
+          ${bp2 > 0 ? `| 买点2 ${bp2.toFixed(2)}` : ''}
+          ${sl > 0 ? `| 🛑${sl.toFixed(2)}` : ''}
+          ${c.take_profit ? `| 🎳${c.take_profit}` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// 渲染持仓列表
+function renderHoldings() {
+  const container = document.getElementById('holdingList');
+  if (!container) return;
+  
+  console.log('[股票监控] renderHoldings - holdings数组长度:', holdings.length);
+  console.log('[股票监控] renderHoldings - holdings数据:', JSON.stringify(holdings));
+  
+  // 只显示持仓状态的股票（status为'holding'或未设置或'当前持仓'）
+  const holdingStocks = holdings.filter(h => h.status !== 'sold' && h.status !== '已卖出');
+  console.log('[股票监控] renderHoldings - 过滤后持仓数量:', holdingStocks.length);
+  
+  if (holdingStocks.length === 0) {
+    container.innerHTML = '<div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">暂无持仓数据</div>';
+    (document.getElementById('holdingCount') as HTMLElement).textContent = '(0只)';
+    return;
+  }
+  
+  (document.getElementById('holdingCount') as HTMLElement).textContent = `(${holdingStocks.length}只)`;
+  
+  // 计算汇总
+  let totalMarketValue = 0;
+  let totalProfit = 0;
+  let totalCost = 0;
+  
+  const html = holdingStocks.map(h => {
+    const price = stockPrices[h.code]?.price || 0;
+    const change = stockPrices[h.code]?.change || 0;
+    const sl = h.stop_loss || 0;
+    const tpStr = h.take_profit || '';
+    const tpParts = tpStr.split('/');
+    const tp1 = parseFloat(tpParts[0]) || 0;
+    
+    const pnl = ((price - h.cost) / h.cost * 100);
+    const pnlAmount = (price - h.cost) * (h.shares || 0);
+    
+    totalMarketValue += price * (h.shares || 0);
+    totalCost += h.cost * (h.shares || 0);
+    totalProfit += pnlAmount;
+    
+    // 状态灯判断（按优先级排序）
+    let statusLight = '🔵';
+    let alertClass = '';
+    let isBigUp = change >= 5;
+    
+    // 止损触发（最高优先级）
+    if (sl > 0 && price <= sl) {
+      statusLight = '🔴';
+      alertClass = 'alert-danger';
+      checkHoldingAlert(h, price, 'stop_loss');
+    } 
+    // 止损逼近
+    else if (sl > 0 && price <= sl * 1.03) {
+      statusLight = '🟠';
+      alertClass = 'alert-warning';
+      checkHoldingAlert(h, price, 'stop_loss_near');
+    } 
+    // 止盈达成
+    else if (tp1 > 0 && price >= tp1) {
+      statusLight = '🟢';
+      alertClass = 'alert-success';
+      checkHoldingAlert(h, price, 'take_profit');
+    }
+    // 大涨提醒（紫色）
+    else if (isBigUp) {
+      statusLight = '🟣';
+      alertClass = 'alert-purple';
+      checkHoldingAlert(h, price, 'big_up');
+    }
+    
+    const isSelected = selectedStockCode === h.code;
+    
+    return `
+      <div class="stock-row ${alertClass} ${isSelected ? 'selected' : ''}" onclick="selectStock('${h.code}')" data-code="${h.code}" data-type="holding">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 14px;">${statusLight}</span>
+            <span style="color: #fff; font-size: 14px; font-weight: 500;">${h.name}</span>
+            <span style="color: rgba(255,255,255,0.5); font-size: 12px;">(${h.code})</span>
+            ${isBigUp ? '<span style="color: #a855f7; font-size: 12px; font-weight: bold;">大涨</span>' : ''}
+          </div>
+          <div style="text-align: right;">
+            <span style="color: ${change >= 0 ? '#ef4444' : '#22c55e'}; font-size: 14px; font-weight: 600;">${price.toFixed(2)}</span>
+            <span style="color: ${pnl >= 0 ? '#ef4444' : '#22c55e'}; font-size: 12px; margin-left: 8px;">${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%</span>
+          </div>
+        </div>
+        <div style="margin-top: 4px; font-size: 12px; color: rgba(255,255,255,0.6);">
+          成本 ${h.cost.toFixed(2)}
+          ${sl > 0 ? `| 🛑${sl.toFixed(2)}` : ''}
+          ${tp1 > 0 ? `| 🎳${tp1.toFixed(2)}` : ''}
+          ${h.shares > 0 ? `| ${h.shares}股` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  container.innerHTML = html;
+  
+  // 更新汇总栏
+  const todayChange = ((totalMarketValue - totalCost) / totalCost * 100);
+  (document.getElementById('holdingSummary') as HTMLElement).innerHTML = `
+    <div style="display: flex; justify-content: space-between;">
+      <div style="display: flex; gap: 24px;">
+        <span style="color: rgba(255,255,255,0.6); font-size: 12px;">总持仓:</span>
+        <span style="color: #fff; font-size: 12px; font-weight: 600;">${holdingStocks.length}只</span>
+      </div>
+      <div style="display: flex; gap: 24px;">
+        <span style="color: rgba(255,255,255,0.6); font-size: 12px;">总市值:</span>
+        <span style="color: #fff; font-size: 12px; font-weight: 600;">¥${totalMarketValue.toLocaleString()}</span>
+      </div>
+      <div style="display: flex; gap: 24px;">
+        <span style="color: rgba(255,255,255,0.6); font-size: 12px;">今日浮盈:</span>
+        <span style="color: ${totalProfit >= 0 ? '#ef4444' : '#22c55e'}; font-size: 12px; font-weight: 600;">${totalProfit >= 0 ? '+' : ''}¥${totalProfit.toFixed(2)} (${todayChange >= 0 ? '+' : ''}${todayChange.toFixed(2)}%)</span>
+      </div>
+    </div>
+  `;
+}
+
+// 检查选股池告警
+function checkCandidateAlert(c: any, price: number) {
+  const bp1 = c.buy_point_1 || 0;
+  const now = Date.now();
+  
+  if (price <= bp1 * 1.01 && bp1 > 0) {
+    const key = `candidate_${c.code}`;
+    if (!alertCooldown[key] || now - alertCooldown[key] > 300000) { // 5分钟冷却
+      alertCooldown[key] = now;
+      const msg = `翔爷，${c.name}(${c.code}) 触及第一买点了！现价${price.toFixed(2)}，买点${bp1.toFixed(2)}，要买么？`;
+      speakAlert(msg);
+      // 显示到气泡
+      if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+        window.writerInstance.type(msg);
+      }
+    }
+  }
+}
+
+// 检查持仓告警
+function checkHoldingAlert(h: any, price: number, type: string) {
+  const now = Date.now();
+  const key = `holding_${h.code}_${type}`;
+  
+  if (alertCooldown[key] && now - alertCooldown[key] <= 300000) {
+    return; // 冷却中
+  }
+  
+  alertCooldown[key] = now;
+  let msg = '';
+  
+  switch (type) {
+    case 'stop_loss':
+      msg = `翔爷，你持仓的${h.name}跌破止损价了！现价${price.toFixed(2)}，止损${h.stop_loss.toFixed(2)}，需要止损么？`;
+      break;
+    case 'stop_loss_near':
+      const dist = ((price - h.stop_loss) / h.stop_loss * 100);
+      msg = `翔爷，${h.name}逼近止损线！现价${price.toFixed(2)}，距止损仅${dist.toFixed(1)}%，注意风险！`;
+      break;
+    case 'take_profit':
+      const pnl = ((price - h.cost) / h.cost * 100);
+      msg = `翔爷，${h.name}止盈达成！现价${price.toFixed(2)}，浮盈${pnl.toFixed(1)}%，需要止盈么？`;
+      break;
+    case 'big_up':
+      const change = stockPrices[h.code]?.change || 0;
+      msg = `翔爷，${h.name}大涨${change.toFixed(1)}%！现价${price.toFixed(2)}，要不要减仓？`;
+      break;
+  }
+  
+  if (msg) {
+    speakAlert(msg);
+    // 显示到气泡
+    if (typeof window.writerInstance !== 'undefined' && window.writerInstance) {
+      window.writerInstance.type(msg);
+    }
+  }
+}
+
+// TTS语音播报
+function speakAlert(text: string) {
+  if (!('speechSynthesis' in window)) {
+    console.warn('浏览器不支持语音合成');
+    return;
+  }
+  
+  const synth = window.speechSynthesis;
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'zh-CN';
+  utter.rate = 1.2;
+  utter.pitch = 1.0;
+  
+  const voices = synth.getVoices();
+  const selectedVoice = voices.find(v => v.name.includes('Xiaoxiao')) || voices.find(v => v.lang.includes('zh')) || voices[0];
+  if (selectedVoice) {
+    utter.voice = selectedVoice;
+  }
+  
+  synth.speak(utter);
+}
+
+// 选择股票
+function selectStock(code: string) {
+  selectedStockCode = selectedStockCode === code ? null : code;
+  renderCandidates();
+  renderHoldings();
+}
+
+// 删除选股池股票
+async function deleteCandidate() {
+  if (!selectedStockCode) {
+    alert('请先选中要删除的股票');
+    return;
+  }
+  
+  const index = candidates.findIndex(c => c.code === selectedStockCode);
+  if (index !== -1) {
+    const stock = candidates[index];
+    if (confirm(`确定要删除 ${stock.name}(${stock.code}) 吗？`)) {
+      try {
+        const response = await fetch('http://127.0.0.1:8765/api/delete_stock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: stock.code, table: 'stock_pool' })
+        });
+        const result = await response.json();
+        if (result.success) {
+          // 从本地数组移除
+          candidates.splice(index, 1);
+          selectedStockCode = null;
+          renderCandidates();
+          alert('删除成功！');
+        } else {
+          alert('删除失败: ' + (result.error || '未知错误'));
+        }
+      } catch (error) {
+        console.error('[股票监控] 删除股票失败:', error);
+        alert('删除失败: 网络错误');
+      }
+    }
+  }
+}
+
+// 卖出持仓股票
+function sellHolding() {
+  if (!selectedStockCode) {
+    alert('请先选中要卖出的股票');
+    return;
+  }
+  
+  const index = holdings.findIndex(h => h.code === selectedStockCode);
+  if (index !== -1) {
+    const stock = holdings[index];
+    const currentPrice = stockPrices[stock.code]?.price || stock.cost;
+    
+    // 打开卖出弹窗
+    const sellModal = document.getElementById('sellStockModal');
+    if (sellModal) {
+      // 设置默认卖出价格为当前价格
+      (document.getElementById('sellPriceInput') as HTMLInputElement).value = currentPrice.toFixed(2);
+      (document.getElementById('sellStockName') as HTMLElement).textContent = `${stock.name}(${stock.code})`;
+      (document.getElementById('sellStockCost') as HTMLElement).textContent = stock.cost.toFixed(2);
+      (document.getElementById('sellStockShares') as HTMLElement).textContent = stock.shares.toString();
+      sellModal.style.display = 'flex';
+    }
+  }
+}
+
+// 确认卖出
+async function confirmSellStock() {
+  const sellPrice = parseFloat((document.getElementById('sellPriceInput') as HTMLInputElement).value);
+  const stockName = (document.getElementById('sellStockName') as HTMLElement).textContent || '';
+  const code = stockName.match(/\((\d{6})\)/)?.[1] || '';
+  
+  if (!code) {
+    alert('无法获取股票代码');
+    return;
+  }
+  
+  if (isNaN(sellPrice) || sellPrice <= 0) {
+    alert('请输入有效的卖出价格');
+    return;
+  }
+  
+  const index = holdings.findIndex(h => h.code === code);
+  if (index !== -1) {
+    const stock = holdings[index];
+    const profit = (sellPrice - stock.cost) * stock.shares;
+    const profitPercent = ((sellPrice - stock.cost) / stock.cost * 100);
+    
+    if (confirm(`确认卖出 ${stock.name}(${stock.code})？\n卖出价格: ¥${sellPrice.toFixed(2)}\n持仓成本: ¥${stock.cost.toFixed(2)}\n持仓数量: ${stock.shares}股\n预计收益: ${profit >= 0 ? '+' : ''}¥${profit.toFixed(2)} (${profitPercent >= 0 ? '+' : ''}${profitPercent.toFixed(2)}%)`)) {
+      try {
+        const response = await fetch('http://127.0.0.1:8765/api/delete_stock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: stock.code, table: 'holdings' })
+        });
+        const result = await response.json();
+        if (result.success) {
+          // 从本地持仓列表移除（因为已卖出）
+          holdings.splice(index, 1);
+          selectedStockCode = null;
+          closeSellModal();
+          renderHoldings();
+          alert(`卖出成功！\n收益: ${profit >= 0 ? '+' : ''}¥${profit.toFixed(2)}`);
+        } else {
+          alert('卖出失败: ' + (result.error || '未知错误'));
+        }
+      } catch (error) {
+        console.error('[股票监控] 卖出失败:', error);
+        alert('卖出失败: 网络错误');
+      }
+    }
+  }
+}
+
+// 关闭卖出弹窗
+function closeSellModal() {
+  const sellModal = document.getElementById('sellStockModal');
+  if (sellModal) {
+    sellModal.style.display = 'none';
+  }
+}
+
+// 确认添加股票
+async function confirmAddStock() {
+  const code = (document.getElementById('stockCodeInput') as HTMLInputElement).value.trim();
+  const name = (document.getElementById('stockNameInput') as HTMLInputElement).value.trim();
+  const bp1 = parseFloat((document.getElementById('buyPoint1Input') as HTMLInputElement).value);
+  const bp2 = parseFloat((document.getElementById('buyPoint2Input') as HTMLInputElement).value);
+  const sl = parseFloat((document.getElementById('stopLossInput') as HTMLInputElement).value);
+  const tp = (document.getElementById('takeProfitInput') as HTMLInputElement).value.trim();
+  const cost = parseFloat((document.getElementById('costPriceInput') as HTMLInputElement).value);
+  const shares = parseInt((document.getElementById('sharesInput') as HTMLInputElement).value);
+  
+  if (!code || code.length !== 6) {
+    alert('请输入有效的6位股票代码');
+    return;
+  }
+  
+  if (!name) {
+    alert('请先查询股票名称');
+    return;
+  }
+  
+  try {
+    const response = await fetch('http://127.0.0.1:8765/api/add_stock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        name,
+        buy_point_1: bp1 || 0,
+        buy_point_2: bp2 || 0,
+        stop_loss: sl || 0,
+        take_profit: tp,
+        cost,
+        shares
+      })
+    });
+    const result = await response.json();
+    if (result.success) {
+      alert('添加成功！');
+      closeAddStockModal();
+      // 刷新数据
+      await fetchHoldingsFromAPI();
+      await fetchCandidatesFromAPI();
+      renderHoldings();
+      renderCandidates();
+    } else {
+      alert('添加失败: ' + (result.error || '未知错误'));
+    }
+  } catch (error) {
+    console.error('[股票监控] 添加股票失败:', error);
+    alert('添加失败: 网络错误');
+  }
+}
+
+// 初始化股票监控
+function initStockMonitor() {
+  // 绑定按钮事件
+  const stockMonitorBtn = document.getElementById('stockMonitorBtn');
+  if (stockMonitorBtn) {
+    stockMonitorBtn.addEventListener('click', openStockMonitor);
+  }
+  
+  const closeStockModalBtn = document.getElementById('closeStockModalBtn');
+  if (closeStockModalBtn) {
+    closeStockModalBtn.addEventListener('click', closeStockMonitor);
+  }
+  
+  // 点击弹窗外部关闭
+  const stockMonitorModal = document.getElementById('stockMonitorModal');
+  if (stockMonitorModal) {
+    stockMonitorModal.addEventListener('click', (e) => {
+      if (e.target === stockMonitorModal) {
+        closeStockMonitor();
+      }
+    });
+  }
+  
+  // 添加股票相关
+  const addCandidateBtn = document.getElementById('addCandidateBtn');
+  const addHoldingBtn = document.getElementById('addHoldingBtn');
+  if (addCandidateBtn) addCandidateBtn.addEventListener('click', openAddStockModal);
+  if (addHoldingBtn) addHoldingBtn.addEventListener('click', openAddStockModal);
+  
+  // 删除股票相关
+  const delCandidateBtn = document.getElementById('delCandidateBtn');
+  const delHoldingBtn = document.getElementById('delHoldingBtn');
+  if (delCandidateBtn) delCandidateBtn.addEventListener('click', deleteCandidate);
+  if (delHoldingBtn) delHoldingBtn.addEventListener('click', sellHolding);
+  
+  const cancelAddBtn = document.getElementById('cancelAddBtn');
+  if (cancelAddBtn) cancelAddBtn.addEventListener('click', closeAddStockModal);
+  
+  const confirmAddBtn = document.getElementById('confirmAddBtn');
+  if (confirmAddBtn) confirmAddBtn.addEventListener('click', confirmAddStock);
+  
+  const searchStockBtn = document.getElementById('searchStockBtn');
+  if (searchStockBtn) {
+    searchStockBtn.addEventListener('click', () => {
+      const code = (document.getElementById('stockCodeInput') as HTMLInputElement).value.trim();
+      searchStock(code);
+    });
+  }
+  
+  // 输入代码后自动查询
+  const stockCodeInput = document.getElementById('stockCodeInput') as HTMLInputElement;
+  if (stockCodeInput) {
+    stockCodeInput.addEventListener('input', (e) => {
+      const target = e.target as HTMLInputElement;
+      if (target.value.length === 6) {
+        searchStock(target.value);
+      }
+    });
+  }
+  
+  // 添加股票弹窗外部点击关闭
+  const addStockModal = document.getElementById('addStockModal');
+  if (addStockModal) {
+    addStockModal.addEventListener('click', (e) => {
+      if (e.target === addStockModal) {
+        closeAddStockModal();
+      }
+    });
+  }
+  
+  // 暴露全局函数供HTML使用
+  (window as any).selectStock = selectStock;
+  (window as any).closeSellModal = closeSellModal;
+  
+  // 手动刷新按钮
+  const refreshStockBtn = document.getElementById('refreshStockBtn');
+  if (refreshStockBtn) {
+    refreshStockBtn.addEventListener('click', () => {
+      console.log('[股票监控] 用户手动触发刷新');
+      refreshStockData();
+    });
+  }
+  
+  // 选股池刷新按钮（从数据库刷新）
+  const refreshCandidateBtn = document.getElementById('refreshCandidateBtn');
+  if (refreshCandidateBtn) {
+    refreshCandidateBtn.addEventListener('click', () => {
+      console.log('[股票监控] 刷新选股池数据');
+      refreshCandidatePool();
+    });
+  }
+  
+  // 股票池筛选下拉框
+  const candidateFilter = document.getElementById('candidateFilter');
+  if (candidateFilter) {
+    candidateFilter.addEventListener('change', changeCandidateFilter);
+  }
+  
+  // Alpha选股按钮
+  const alphaScanBtn = document.getElementById('alphaScanBtn');
+  if (alphaScanBtn) {
+    alphaScanBtn.addEventListener('click', openAlphaScanModal);
+  }
+  
+  // Alpha选股弹窗关闭按钮
+  const closeAlphaModalBtn = document.getElementById('closeAlphaModalBtn');
+  if (closeAlphaModalBtn) {
+    closeAlphaModalBtn.addEventListener('click', closeAlphaScanModal);
+  }
+  
+  // Alpha选股开始扫描按钮
+  const startAlphaScanBtn = document.getElementById('startAlphaScanBtn');
+  if (startAlphaScanBtn) {
+    startAlphaScanBtn.addEventListener('click', executeAlphaScan);
+  }
+  
+  // Alpha选股弹窗外部点击关闭
+  const alphaScanModal = document.getElementById('alphaScanModal');
+  if (alphaScanModal) {
+    alphaScanModal.addEventListener('click', (e) => {
+      if (e.target === alphaScanModal) {
+        closeAlphaScanModal();
+      }
+    });
+  }
+  
+  // 卖出确认按钮
+  const confirmSellBtn = document.getElementById('confirmSellBtn');
+  if (confirmSellBtn) {
+    confirmSellBtn.addEventListener('click', confirmSellStock);
+  }
+  
+  // 卖出弹窗外部点击关闭
+  const sellStockModal = document.getElementById('sellStockModal');
+  if (sellStockModal) {
+    sellStockModal.addEventListener('click', (e) => {
+      if (e.target === sellStockModal) {
+        closeSellModal();
+      }
+    });
+  }
+  
+  // 刷新间隔选择器（仅记录值，不自动应用）
+  const refreshIntervalSelect = document.getElementById('refreshIntervalSelect') as HTMLSelectElement;
+  
+  // 刷新间隔确认按钮
+  const confirmIntervalBtn = document.getElementById('confirmIntervalBtn');
+  if (confirmIntervalBtn) {
+    confirmIntervalBtn.addEventListener('click', () => {
+      if (refreshIntervalSelect) {
+        const newInterval = parseInt(refreshIntervalSelect.value);
+        console.log('[股票监控] 刷新间隔变更为:', newInterval / 1000, '秒');
+        refreshInterval = newInterval;
+        // 重启定时器
+        startRefreshTimer();
+        alert(`刷新间隔已设置为 ${newInterval / 1000} 秒`);
+      }
+    });
+  }
+  
+  // 启动定时刷新
+  startRefreshTimer();
+}
+
+// 启动/重启定时刷新
+function startRefreshTimer() {
+  // 清除旧定时器
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+  }
+  // 启动新定时器
+  refreshTimer = window.setInterval(() => {
+    const modal = document.getElementById('stockMonitorModal');
+    if (modal && modal.style.display === 'flex') {
+      refreshStockData();
+    }
+  }, refreshInterval);
+}
+
+// 刷新选股池（从后端API刷新）
+async function refreshCandidatePool() {
+  console.log('[股票监控] 刷新选股池 - 从API获取最新数据, 筛选类型:', candidateFilterType);
+  
+  // 从API刷新选股池数据（使用当前筛选类型）
+  await fetchCandidatesFromAPI(candidateFilterType);
+  
+  // 同时刷新持仓数据
+  await fetchHoldingsFromAPI();
+  
+  // 刷新界面
+  renderCandidates();
+  renderHoldings();
+  
+  alert(`选股池已刷新！\n选股池: ${candidates.length}只\n持仓: ${holdings.length}只`);
+}
+
+// 切换股票池筛选
+async function changeCandidateFilter() {
+  const select = document.getElementById('candidateFilter') as HTMLSelectElement;
+  if (select) {
+    candidateFilterType = select.value;
+    console.log('[股票监控] 股票池筛选类型切换为:', candidateFilterType);
+    await refreshCandidatePool();
+  }
+}
+
+// Alpha选股功能
+let alphaScanResults: any[] = [];
+
+// 打开Alpha选股弹窗
+function openAlphaScanModal() {
+  const modal = document.getElementById('alphaScanModal');
+  if (modal) {
+    modal.style.display = 'flex';
+  }
+}
+
+// 关闭Alpha选股弹窗
+function closeAlphaScanModal() {
+  const modal = document.getElementById('alphaScanModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+// 执行Alpha选股扫描
+async function executeAlphaScan() {
+  console.log('[Alpha选股] 开始执行选股扫描...');
+  
+  const resultList = document.getElementById('alphaResultList');
+  const resultCount = document.getElementById('alphaResultCount');
+  const scanBtn = document.getElementById('startAlphaScanBtn') as HTMLButtonElement;
+  
+  if (scanBtn) {
+    scanBtn.innerHTML = '扫描中...';
+    scanBtn.disabled = true;
+  }
+  
+  if (resultList) {
+    resultList.innerHTML = `
+      <div style="text-align: center; color: rgba(255,255,255,0.6); padding: 40px 0;">
+        <div style="font-size: 32px; margin-bottom: 12px;">搜索</div>
+        <div>正在扫描A股市场...</div>
+        <div style="font-size: 12px; color: rgba(255,255,255,0.4); margin-top: 8px;">此过程可能需要10-30秒</div>
+      </div>
+    `;
+  }
+  
+  try {
+    console.log('[Alpha选股] 开始调用API: /api/alpha_scan');
+    const response = await fetch('http://127.0.0.1:8765/api/alpha_scan');
+    console.log('[Alpha选股] API响应状态:', response.status);
+    console.log('[Alpha选股] API响应状态文本:', response.statusText);
+    
+    const result = await response.json();
+    console.log('[Alpha选股] API返回数据:', JSON.stringify(result, null, 2));
+    
+    if (result['推荐']) {
+      console.log('[Alpha选股] 发现推荐字段，长度:', result['推荐'].length);
+      alphaScanResults = result['推荐'];
+      console.log('[Alpha选股] 准备渲染结果...');
+      renderAlphaResults(alphaScanResults);
+      if (resultCount) {
+        resultCount.innerHTML = alphaScanResults.length + '只';
+        console.log('[Alpha选股] 更新结果数量:', alphaScanResults.length + '只');
+      }
+      console.log('[Alpha选股] 扫描完成，找到 ' + alphaScanResults.length + ' 只股票');
+    } else if (result['error']) {
+      console.error('[Alpha选股] API返回错误:', result['error']);
+      if (resultList) {
+        resultList.innerHTML = `
+          <div style="text-align: center; color: rgba(239,68,68,0.8); padding: 40px 0;">
+            <div style="font-size: 32px; margin-bottom: 12px;">❌</div>
+            <div>扫描失败: ${result['error']}</div>
+          </div>
+        `;
+      }
+    } else {
+      console.log('[Alpha选股] 未找到推荐字段，返回数据:', JSON.stringify(result));
+      if (resultList) {
+        resultList.innerHTML = `
+          <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">
+            <div style="font-size: 32px; margin-bottom: 12px;">😔</div>
+            <div>未找到符合条件的股票</div>
+          </div>
+        `;
+      }
+    }
+  } catch (error) {
+    console.error('[Alpha选股] 扫描失败:', error);
+    console.error('[Alpha选股] 错误详情:', (error as Error).message);
+    if (resultList) {
+      resultList.innerHTML = `
+        <div style="text-align: center; color: rgba(239,68,68,0.8); padding: 40px 0;">
+          <div style="font-size: 32px; margin-bottom: 12px;">❌</div>
+          <div>扫描失败，请检查后端服务</div>
+        </div>
+      `;
+    }
+  } finally {
+    console.log('[Alpha选股] finally块执行');
+    if (scanBtn) {
+      scanBtn.innerHTML = '开始扫描';
+      scanBtn.disabled = false;
+      console.log('[Alpha选股] 按钮状态已重置');
+    }
+  }
+}
+
+// 渲染Alpha选股结果
+function renderAlphaResults(results: any[]) {
+  const resultList = document.getElementById('alphaResultList');
+  if (!resultList) return;
+  
+  if (results.length === 0) {
+    resultList.innerHTML = `
+      <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">
+        <div style="font-size: 32px; margin-bottom: 12px;">😔</div>
+        <div>未找到符合条件的股票</div>
+      </div>
+    `;
+    return;
+  }
+  
+  resultList.innerHTML = results.map((stock, index) => `
+    <div 
+      style="padding: 10px 12px; margin-bottom: 6px; background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer; transition: all 0.2s; border-left: 3px solid ${getScoreColor(stock.评分)};"
+      onclick="selectAlphaStock(${index})"
+    >
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+        <span style="color: #fff; font-size: 13px; font-weight: 600;">${stock.名称}</span>
+        <span style="color: ${stock.涨幅 >= 0 ? '#22c55e' : '#ef4444'}; font-size: 12px;">${stock.涨幅 >= 0 ? '+' : ''}${stock.涨幅.toFixed(2)}%</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="color: rgba(255,255,255,0.5); font-size: 11px;">${stock.代码}</span>
+        <span style="color: ${getScoreColor(stock.评分)}; font-size: 11px; font-weight: 600;">评分: ${stock.评分}</span>
+      </div>
+      <div style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px;">
+        ${stock.条件.slice(0, 3).map((cond: string) => `
+          <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.7);">${cond}</span>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+// 获取评分颜色
+function getScoreColor(score: number): string {
+  if (score >= 30) return '#22c55e';
+  if (score >= 15) return '#fbbf24';
+  if (score >= 0) return '#60a5fa';
+  return '#ef4444';
+}
+
+// 选择Alpha选股结果
+function selectAlphaStock(index: number) {
+  const stock = alphaScanResults[index];
+  if (!stock) return;
+  
+  const detailPanel = document.getElementById('alphaDetailPanel');
+  if (!detailPanel) return;
+  
+  // 生成条件标签HTML
+  const conditionTags = stock.条件.map((cond: string) => {
+    let bgColor = 'rgba(255,255,255,0.1)';
+    let textColor = 'rgba(255,255,255,0.8)';
+    if (cond.includes('✅')) {
+      bgColor = 'rgba(34,197,94,0.2)';
+      textColor = '#22c55e';
+    } else if (cond.includes('⚠️')) {
+      bgColor = 'rgba(239,68,68,0.2)';
+      textColor = '#ef4444';
+    }
+    return `<span style="font-size: 12px; padding: 4px 10px; border-radius: 6px; background: ${bgColor}; color: ${textColor};">${cond}</span>`;
+  }).join('');
+  
+  const changeColor = stock.涨幅 >= 0 ? '#22c55e' : '#ef4444';
+  const changeSign = stock.涨幅 >= 0 ? '+' : '';
+  const evColor = stock.EV >= 0 ? '#22c55e' : '#ef4444';
+  const evSign = stock.EV >= 0 ? '+' : '';
+  const scoreColor = getScoreColor(stock.评分);
+  
+  detailPanel.innerHTML = `
+    <div style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div>
+          <h3 style="color: #fff; font-size: 18px; font-weight: 600; margin-bottom: 4px;">${stock.名称}</h3>
+          <span style="color: rgba(255,255,255,0.6); font-size: 12px;">${stock.代码}</span>
+        </div>
+        <div style="text-align: right;">
+          <div style="color: #fff; font-size: 24px; font-weight: 600;">¥${stock.现价.toFixed(2)}</div>
+          <div style="color: ${changeColor}; font-size: 14px;">${changeSign}${stock.涨幅.toFixed(2)}%</div>
+        </div>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+        <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">流通市值</div>
+          <div style="color: #fff; font-size: 13px; font-weight: 600;">${stock.流通市值亿.toFixed(1)}亿</div>
+        </div>
+        <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">换手率</div>
+          <div style="color: #fff; font-size: 13px; font-weight: 600;">${stock.换手率.toFixed(2)}%</div>
+        </div>
+        <div style="background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">EV期望值</div>
+          <div style="color: ${evColor}; font-size: 13px; font-weight: 600;">${evSign}${stock.EV.toFixed(2)}</div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+      <h4 style="color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 12px;">📈 K线图</h4>
+      <div id="klineChart_${index}" style="height: 250px; width: 100%;"></div>
+    </div>
+    
+    <div id="klineIndicator_${index}" style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+      <h4 style="color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 12px;">📊 技术指标</h4>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 8px; padding: 12px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">RSI(14)</div>
+          <div id="rsiValue_${index}" style="color: #fbbf24; font-size: 18px; font-weight: 600;">加载中...</div>
+        </div>
+        <div style="background: rgba(99,102,241,0.1); border: 1px solid rgba(99,102,241,0.3); border-radius: 8px; padding: 12px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">趋势判断</div>
+          <div id="trendValue_${index}" style="color: #818cf8; font-size: 18px; font-weight: 600;">-</div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+      <h4 style="color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 12px;">操作建议</h4>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div style="background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); border-radius: 8px; padding: 12px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">买点1</div>
+          <div style="color: #22c55e; font-size: 18px; font-weight: 600;">¥${stock.买点1.toFixed(2)}</div>
+        </div>
+        <div style="background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); border-radius: 8px; padding: 12px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">买点2</div>
+          <div style="color: #60a5fa; font-size: 18px; font-weight: 600;">¥${stock.买点2.toFixed(2)}</div>
+        </div>
+        <div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">止损价</div>
+          <div style="color: #ef4444; font-size: 18px; font-weight: 600;">¥${stock.止损.toFixed(2)}</div>
+        </div>
+        <div style="background: rgba(168,85,247,0.1); border: 1px solid rgba(168,85,247,0.3); border-radius: 8px; padding: 12px;">
+          <div style="color: rgba(255,255,255,0.6); font-size: 11px; margin-bottom: 4px;">综合评分</div>
+          <div style="color: ${scoreColor}; font-size: 18px; font-weight: 600;">${stock.评分}</div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 16px;">
+      <h4 style="color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 12px;">选股条件</h4>
+      <div style="display: flex; flex-wrap: wrap; gap: 6px;">${conditionTags}</div>
+    </div>
+    
+    <div style="margin-top: 16px; display: flex; gap: 12px;">
+      <button id="addToPoolBtn_${index}" style="flex: 1; padding: 10px; border-radius: 8px; border: none; background: rgba(34,197,94,0.5); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+        添加到选股池
+      </button>
+    </div>
+  `;
+  
+  // 添加事件监听
+  const addBtn = document.getElementById(`addToPoolBtn_${index}`);
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      addToStockPool(stock.代码, stock.名称, stock.买点1, stock.买点2, stock.止损);
+    });
+  }
+  
+  // 加载K线数据
+  loadKlineData(stock.代码, index);
+}
+(window as any).selectAlphaStock = selectAlphaStock;
+
+// 加载K线数据并渲染图表
+async function loadKlineData(code: string, index: number) {
+  const chartId = `klineChart_${index}`;
+  const chartDom = document.getElementById(chartId);
+  if (!chartDom || typeof echarts === 'undefined') return;
+  
+  const chart = echarts.init(chartDom);
+  
+  try {
+    const response = await fetch(`http://127.0.0.1:8765/api/kline/${code}`);
+    const result = await response.json();
+    
+    if (!result.data || result.data.length === 0) {
+      chartDom.innerHTML = '<div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">暂无法获取K线数据</div>';
+      return;
+    }
+    
+    const dates = result.data.map((item: any) => item.date);
+    const klineValues = result.data.map((item: any) => [item.open, item.close, item.low, item.high]);
+    const volumes = result.data.map((item: any) => item.volume);
+    
+    // 计算RSI
+    const rsi = calculateRSI(result.data.map((item: any) => item.close), 14);
+    
+    const option = {
+      backgroundColor: 'transparent',
+      animation: false,
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: {
+          type: 'cross'
+        },
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        borderColor: 'rgba(255,255,255,0.1)',
+        textStyle: { color: '#fff' }
+      },
+      axisPointer: {
+        link: [{ xAxisIndex: 'all' }]
+      },
+      grid: [
+        {
+          left: '10%',
+          right: '8%',
+          top: '5%',
+          height: '50%'
+        },
+        {
+          left: '10%',
+          right: '8%',
+          top: '62%',
+          height: '18%'
+        },
+        {
+          left: '10%',
+          right: '8%',
+          top: '85%',
+          height: '10%'
+        }
+      ],
+      xAxis: [
+        {
+          type: 'category',
+          data: dates,
+          axisLine: { lineStyle: { color: 'rgba(255,255,255,0.2)' } },
+          axisLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
+          axisTick: { show: false },
+          splitLine: { show: false }
+        },
+        {
+          type: 'category',
+          gridIndex: 1,
+          data: dates,
+          axisLine: { lineStyle: { color: 'rgba(255,255,255,0.2)' } },
+          axisLabel: { show: false },
+          axisTick: { show: false },
+          splitLine: { show: false }
+        },
+        {
+          type: 'category',
+          gridIndex: 2,
+          data: dates,
+          axisLine: { lineStyle: { color: 'rgba(255,255,255,0.2)' } },
+          axisLabel: { show: false },
+          axisTick: { show: false },
+          splitLine: { show: false }
+        }
+      ],
+      yAxis: [
+        {
+          scale: true,
+          splitNumber: 2,
+          axisLine: { lineStyle: { color: 'rgba(255,255,255,0.2)' } },
+          axisLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
+          splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } }
+        },
+        {
+          scale: true,
+          gridIndex: 1,
+          splitNumber: 2,
+          axisLine: { lineStyle: { color: 'rgba(255,255,255,0.2)' } },
+          axisLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
+          splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } }
+        },
+        {
+          scale: true,
+          gridIndex: 2,
+          splitNumber: 2,
+          axisLine: { lineStyle: { color: 'rgba(255,255,255,0.2)' } },
+          axisLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
+          splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } }
+        }
+      ],
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: [0, 1, 2],
+          start: 50,
+          end: 100
+        }
+      ],
+      series: [
+        {
+          name: 'K线',
+          type: 'candlestick',
+          data: klineValues,
+          itemStyle: {
+            color: '#22c55e',
+            color0: '#ef4444',
+            borderColor: '#22c55e',
+            borderColor0: '#ef4444'
+          }
+        },
+        {
+          name: '成交量',
+          type: 'bar',
+          xAxisIndex: 1,
+          yAxisIndex: 1,
+          data: volumes.map((vol: number, i: number) => ({
+            value: vol,
+            itemStyle: {
+              color: klineValues[i][1] >= klineValues[i][0] ? '#22c55e' : '#ef4444'
+            }
+          }))
+        },
+        {
+          name: 'RSI',
+          type: 'line',
+          xAxisIndex: 2,
+          yAxisIndex: 2,
+          data: rsi,
+          lineStyle: { color: '#fbbf24', width: 2 },
+          smooth: true
+        }
+      ]
+    };
+    
+    chart.setOption(option);
+    
+    window.addEventListener('resize', () => {
+      chart.resize();
+    });
+    
+    // 更新RSI数值显示
+    const latestRsi = rsi.length > 0 ? rsi[rsi.length - 1] : 0;
+    const rsiElement = document.getElementById(`rsiValue_${index}`);
+    if (rsiElement) {
+      rsiElement.textContent = latestRsi.toFixed(1);
+      if (latestRsi >= 70) {
+        rsiElement.style.color = '#ef4444';
+      } else if (latestRsi <= 30) {
+        rsiElement.style.color = '#22c55e';
+      } else {
+        rsiElement.style.color = '#fbbf24';
+      }
+    }
+    
+    // 更新趋势判断
+    const trendElement = document.getElementById(`trendValue_${index}`);
+    if (trendElement) {
+      if (latestRsi >= 70) {
+        trendElement.textContent = '超买';
+        trendElement.style.color = '#ef4444';
+      } else if (latestRsi <= 30) {
+        trendElement.textContent = '超卖';
+        trendElement.style.color = '#22c55e';
+      } else if (latestRsi > 50) {
+        trendElement.textContent = '偏强';
+        trendElement.style.color = '#60a5fa';
+      } else {
+        trendElement.textContent = '偏弱';
+        trendElement.style.color = '#a1a1aa';
+      }
+    }
+    
+  } catch (error) {
+    console.error('[K线] 加载失败:', error);
+    chartDom.innerHTML = '<div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">K线数据加载失败</div>';
+  }
+}
+
+// 计算RSI指标
+function calculateRSI(prices: number[], period: number): number[] {
+  const rsi: number[] = [];
+  if (prices.length < period) return rsi;
+  
+  let gains = 0;
+  let losses = 0;
+  
+  for (let i = 1; i <= period; i++) {
+    const change = prices[i] - prices[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  const rs = avgGain / (avgLoss || 1);
+  rsi.push(Math.round((1 - 1 / (1 + rs)) * 100));
+  
+  for (let i = period + 1; i < prices.length; i++) {
+    const change = prices[i] - prices[i - 1];
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+    
+    const newAvgGain = (avgGain * (period - 1) + gain) / period;
+    const newAvgLoss = (avgLoss * (period - 1) + loss) / period;
+    const rs = newAvgGain / (newAvgLoss || 1);
+    rsi.push(Math.round((1 - 1 / (1 + rs)) * 100));
+  }
+  
+  return rsi;
+}
+
+// 添加到选股池
+async function addToStockPool(code: string, name: string, buyPoint1: number, buyPoint2: number, stopLoss: number) {
+  try {
+    const response = await fetch('http://127.0.0.1:8765/api/add_stock', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        code,
+        name,
+        buy_point_1: buyPoint1,
+        buy_point_2: buyPoint2,
+        stop_loss: stopLoss,
+        type: 'candidate'
+      })
+    });
+    
+    const result = await response.json();
+    if (result.success) {
+      alert(name + '(' + code + ') 已添加到选股池！');
+    } else {
+      alert('添加失败: ' + (result.message || '未知错误'));
+    }
+  } catch (error) {
+    console.error('添加到选股池失败:', error);
+    alert('添加失败，请检查网络连接');
+  }
+}
+
 function initLive2D() {
   setupModelSelector();
   setupSoundSelector();
   setupChatInterface();
+  initStockMonitor();
   // 初始化 WebSocket 连接
   initWebSocket();
   // 如果没有下拉框（例如纯网页嵌入），也加载一个默认模型

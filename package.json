@@ -1,7 +1,7 @@
 {
   "name": "live2d-agent-ui",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -10,16 +10,44 @@
     "preview": "vite preview",
     "electron:dev": "cross-env ELECTRON_DEV=1 concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:start": "electron .",
-    "electron": "npm run build && electron ."
+    "electron": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.example.live2d-agent",
+    "productName": "Live2D桌宠助手",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "forceCodeSigning": false
+    }
   },
   "devDependencies": {
+    "@types/ws": "^8.18.1",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "^33.4.11",
+    "electron-builder": "^26.8.1",
     "typescript": "~5.9.3",
     "vite": "^7.3.1",
     "vite-plugin-electron": "^0.29.0",
-    "wait-on": "^8.0.1"
+    "wait-on": "^8.0.1",
+    "ws": "^8.20.0"
   },
   "dependencies": {
     "pixi-live2d-display": "^0.4.0",

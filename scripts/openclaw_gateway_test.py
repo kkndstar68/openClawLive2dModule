@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import asyncio
+import websockets
+import json
+import sys
+
+# 配置信息
+CONFIG = {
+    'ws_url': 'ws://127.0.0.1:18789',
+    'tokens': {
+        'gateway': 'b43f34201aa00efc5d19150d9e8887df5d70773c565ef7d0',
+        'cli_static': 'CR-ztX4COeIqj22f6Yiev40lHyQJwFFszn6xqhm6Sto',  # 配置文件中的正确token
+        'http_hook': 'my-super-secret-token-2025'
+    },
+    'device_id': '5e3121039163ca20da0dc8c3a4836347fe0447e5ce255df088137b54e1166f07',
+    'tg_chat_id': 6171555084,
+    'client_ids_to_test': [
+        'cli',
+        'control-ui', 
+        'desktop',
+        'agent',
+        '5e3121039163ca20da0dc8c3a4836347fe0447e5ce255df088137b54e1166f07',
+        ''
+    ]
+}
+
+async def print_with_flush(*args, **kwargs):
+    """带flush的print函数"""
+    print(*args, **kwargs)
+    sys.stdout.flush()
+
+async def connect_and_handshake(ws_url, token, client_id='cli-test'):
+    """
+    执行WebSocket连接和握手
+    返回: (success, ws, response)
+    """
+    ws = None
+    try:
+        await print_with_flush(f"  [连接] 尝试连接到 {ws_url}")
+        
+        # 添加Origin头部以绕过origin校验
+        headers = {
+            "Origin": "http://127.0.0.1:18789"
+        }
+        await print_with_flush(f"  [连接] Origin头部: {headers['Origin']}")
+        
+        ws = await websockets.connect(ws_url, additional_headers=headers)
+        await print_with_flush(f"  [连接] 连接成功")
+        
+        # 构造握手请求
+        handshake_msg = {
+            "type": "req",
+            "id": "connect-001",
+            "method": "connect",
+            "params": {
+                "minProtocol": 3,
+                "maxProtocol": 3,
+                "client": {
+                    "id": "cli",
+                    "version": "1.0.0",
+                    "platform": "win32",
+                    "mode": "cli"
+                },
+                "auth": {
+                    "token": token
+                },
+                "locale": "zh-CN"
+            }
+        }
+        
+        await print_with_flush(f"  [握手] client.id: {client_id}")
+        await print_with_flush(f"  [握手] token前8位: {token[:8]}...")
+        await print_with_flush(f"  [握手] 发送握手请求...")
+        await ws.send(json.dumps(handshake_msg, ensure_ascii=False))
+        
+        # 等待握手响应（最多等待5秒）
+        response = None
+        timeout = 5
+        start_time = asyncio.get_event_loop().time()
+        
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=1)
+                await print_with_flush(f"  [握手] 收到消息: {msg}")
+                
+                try:
+                    data = json.loads(msg)
+                    if data.get('type') == 'event' and data.get('event') == 'connect.challenge':
+                        await print_with_flush(f"  [握手] 收到挑战事件，继续等待...")
+                    elif data.get('type') == 'res':
+                        response = data
+                        if data.get('ok'):
+                            await print_with_flush(f"  [握手] ✅ 握手成功!")
+                        else:
+                            await print_with_flush(f"  [握手] ❌ 握手失败: {data.get('error')}")
+                        break
+                except json.JSONDecodeError:
+                    await print_with_flush(f"  [握手] 非JSON消息: {msg}")
+            except asyncio.TimeoutError:
+                continue
+        
+        if response is None:
+            await print_with_flush(f"  [握手] ❌ 超时未收到响应")
+            return (False, ws, None)
+        
+        return (response.get('ok', False), ws, response)
+    
+    except websockets.exceptions.WebSocketException as e:
+        await print_with_flush(f"  [连接] ❌ WebSocket错误: {type(e).__name__}: {e}")
+        if ws:
+            await ws.close()
+        return (False, None, {'error': str(e)})
+    except Exception as e:
+        await print_with_flush(f"  [连接] ❌ 未知错误: {type(e).__name__}: {e}")
+        if ws:
+            await ws.close()
+        return (False, None, {'error': str(e)})
+
+async def send_agent_message(ws, message, session_key='test-debug-001'):
+    """
+    发送Agent消息
+    """
+    try:
+        msg_id = f"msg-{session_key}-{hash(message) % 10000}"
+        agent_msg = {
+            "type": "req",
+            "id": msg_id,
+            "method": "agent",
+            "params": {
+                "message": message,
+                "sessionKey": session_key,
+                "idempotencyKey": f"test-{msg_id}"
+            }
+        }
+        
+        await print_with_flush(f"  [发送] 发送Agent消息...")
+        await print_with_flush(f"  [发送] 消息内容: {json.dumps(agent_msg, ensure_ascii=False)}")
+        await ws.send(json.dumps(agent_msg, ensure_ascii=False))
+        
+        # 等待回复（最多10秒）
+        timeout = 10
+        start_time = asyncio.get_event_loop().time()
+        responses = []
+        
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=2)
+                await print_with_flush(f"  [接收] 收到回复: {msg}")
+                
+                try:
+                    data = json.loads(msg)
+                    responses.append(data)
+                    
+                    if data.get('type') == 'event':
+                        event_type = data.get('event')
+                        if event_type == 'lifecycle' and data.get('payload', {}).get('phase') == 'end':
+                            await print_with_flush(f"  [接收] ✅ 收到结束信号")
+                            break
+                        elif event_type == 'agent':
+                            await print_with_flush(f"  [接收] Agent响应: {data.get('payload', {})}")
+                        elif event_type == 'chat':
+                            content = data.get('payload', {}).get('message', {}).get('content', [])
+                            text = ''.join(c.get('text', '') for c in content)
+                            await print_with_flush(f"  [接收] Chat响应: {text}")
+                except json.JSONDecodeError:
+                    await print_with_flush(f"  [接收] 非JSON响应: {msg}")
+            except asyncio.TimeoutError:
+                await print_with_flush(f"  [接收] 等待超时，结束监听")
+                break
+        
+        return (True, responses)
+    
+    except Exception as e:
+        await print_with_flush(f"  [发送] ❌ 发送失败: {type(e).__name__}: {e}")
+        return (False, {'error': str(e)})
+
+async def test_1_basic_connectivity():
+    """Test 1: 基础连通性测试 - 尝试多个client.id"""
+    await print_with_flush("\n" + "="*70)
+    await print_with_flush("Test 1: 基础连通性测试")
+    await print_with_flush("="*70)
+    
+    # 尝试多个可能的client.id
+    for client_id in CONFIG['client_ids_to_test']:
+        await print_with_flush(f"\n  --- 尝试 client.id: '{client_id}' ---")
+        success, ws, response = await connect_and_handshake(
+            CONFIG['ws_url'], 
+            CONFIG['tokens']['cli_static'],  # 使用配置文件中的token
+            client_id
+        )
+        
+        if success and ws:
+            await print_with_flush(f"  [测试] ✅ 成功! client.id: '{client_id}' 有效")
+            await print_with_flush(f"  [测试] 发送echo消息...")
+            await send_agent_message(ws, "echo: OpenClaw Gateway 连通性测试")
+            await ws.close()
+            return  # 找到有效client.id，退出测试
+        
+        if ws:
+            await ws.close()
+    
+    await print_with_flush(f"\n  [测试] ❌ 所有client.id都无效")
+
+async def test_2_send_to_telegram():
+    """Test 2: 发送消息到Telegram"""
+    await print_with_flush("\n" + "="*70)
+    await print_with_flush("Test 2: 发送消息到Telegram")
+    await print_with_flush("="*70)
+    
+    success, ws, response = await connect_and_handshake(
+        CONFIG['ws_url'], 
+        CONFIG['tokens']['gateway'],
+        CONFIG['device_id']  # 使用设备ID
+    )
+    
+    if success and ws:
+        await print_with_flush(f"  [测试] 连接成功，准备发送TG消息...")
+        # 构造发送到TG的消息
+        tg_message = f"send-telegram --chat-id {CONFIG['tg_chat_id']} --message 'OpenClaw Gateway 测试 — 如果你看到这条消息说明 gateway→TG 通道正常'"
+        await print_with_flush(f"  [测试] 待发送消息: {tg_message}")
+        
+        success_send, responses = await send_agent_message(ws, tg_message, 'tg-test-001')
+        
+        if success_send:
+            await print_with_flush(f"  [测试] ✅ 消息已发送到Gateway")
+            await print_with_flush(f"  [测试] 响应详情: {json.dumps(responses, ensure_ascii=False, indent=2)}")
+        else:
+            await print_with_flush(f"  [测试] ❌ 消息发送失败: {responses}")
+        
+        await ws.close()
+    else:
+        await print_with_flush(f"  [测试] ❌ 连接失败，无法发送消息: {response}")
+
+async def test_3_token_validation():
+    """Test 3: 测试不同Token的行为"""
+    await print_with_flush("\n" + "="*70)
+    await print_with_flush("Test 3: 测试不同Token的行为")
+    await print_with_flush("="*70)
+    
+    # 测试CLI静态Token（使用设备ID作为client.id）
+    await print_with_flush("\n  --- 测试CLI静态Token (CQ-ztX4...) ---")
+    success, ws, response = await connect_and_handshake(
+        CONFIG['ws_url'], 
+        CONFIG['tokens']['cli_static'],
+        CONFIG['device_id']  # 使用设备ID作为client.id
+    )
+    
+    if ws:
+        await ws.close()
+    
+    if not success:
+        # 处理error_msg可能是字典或字符串的情况
+        if isinstance(response, dict) and 'error' in response:
+            error_dict = response['error']
+            if isinstance(error_dict, dict):
+                error_msg = error_dict.get('message', str(error_dict))
+            else:
+                error_msg = str(error_dict)
+        else:
+            error_msg = str(response)
+        
+        await print_with_flush(f"  [测试] 错误信息: {error_msg}")
+        
+        if 'missing scope' in error_msg.lower() or 'operator.write' in error_msg.lower():
+            await print_with_flush(f"  [测试] ✅ 预期错误: 缺少 operator.write 权限")
+        elif 'must be equal to one of the allowed values' in error_msg:
+            await print_with_flush(f"  [测试] ⚠️ 配置错误: client.id 不在允许列表中")
+        else:
+            await print_with_flush(f"  [测试] ❌ 非预期错误")
+    
+    # 测试HTTP Hook Token（使用设备ID作为client.id）
+    await print_with_flush("\n  --- 测试HTTP Hook Token (my-super-secret...) ---")
+    success, ws, response = await connect_and_handshake(
+        CONFIG['ws_url'], 
+        CONFIG['tokens']['http_hook'],
+        CONFIG['device_id']  # 使用设备ID作为client.id
+    )
+    
+    if ws:
+        await ws.close()
+    
+    if not success:
+        if isinstance(response, dict) and 'error' in response:
+            error_dict = response['error']
+            if isinstance(error_dict, dict):
+                error_msg = error_dict.get('message', str(error_dict))
+            else:
+                error_msg = str(error_dict)
+        else:
+            error_msg = str(response)
+        await print_with_flush(f"  [测试] 结果: {error_msg}")
+
+async def test_4_detailed_diagnostic():
+    """Test 4: 详细诊断输出"""
+    await print_with_flush("\n" + "="*70)
+    await print_with_flush("Test 4: 详细诊断输出")
+    await print_with_flush("="*70)
+    
+    await print_with_flush(f"\n  [环境信息]")
+    await print_with_flush(f"    WebSocket URL: {CONFIG['ws_url']}")
+    await print_with_flush(f"    Python版本: {sys.version}")
+    await print_with_flush(f"    websockets版本: {websockets.__version__}")
+    
+    await print_with_flush(f"\n  [Token列表]")
+    for name, token in CONFIG['tokens'].items():
+        masked = token[:8] + '*' * (len(token) - 8)
+        await print_with_flush(f"    {name}: {masked}")
+    
+    await print_with_flush(f"\n  [目标TG信息]")
+    await print_with_flush(f"    Chat ID: {CONFIG['tg_chat_id']}")
+
+async def main():
+    """主测试函数"""
+    await print_with_flush("="*70)
+    await print_with_flush("OpenClaw Gateway → Telegram 消息发送测试")
+    await print_with_flush("="*70)
+    await print_with_flush(f"开始时间: {asyncio.get_event_loop().time():.2f}")
+    
+    # 执行所有测试
+    await test_1_basic_connectivity()
+    await test_2_send_to_telegram()
+    await test_3_token_validation()
+    await test_4_detailed_diagnostic()
+    
+    await print_with_flush("\n" + "="*70)
+    await print_with_flush("所有测试完成")
+    await print_with_flush("="*70)
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[程序] 用户中断")
+    except Exception as e:
+        print(f"[程序] 致命错误: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()

@@ -1,0 +1,78 @@
+{
+  "scanner_config": {
+    "min_score": 60,
+    "max_results": 20,
+    "max_etf_results": 10,
+    "exclude_st": true,
+    "exclude_suspended": true,
+    "min_price": 3,
+    "min_market_cap": 10,
+    "focus_hot_sectors": true,
+    "hot_sectors_top_n": 5,
+    "etf_min_turnover": 30000000,
+    "fetch_index_for_market_context": true,
+    "max_scan_stocks": 500
+  },
+  "factor_weights": {
+    "stock": {
+      "trend": 0.30,
+      "volume": 0.25,
+      "rsi": 0.15,
+      "valuation": 0.20,
+      "hotspot": 0.10
+    },
+    "etf": {
+      "trend": 0.40,
+      "volume": 0.30,
+      "rsi": 0.30,
+      "valuation": 0,
+      "hotspot": 0
+    }
+  },
+  "etf_config": {
+    "focus_categories": ["科技", "新能源", "黄金", "稀土", "电力"],
+    "min_daily_turnover": 30000000,
+    "track_codes": {
+      "科技": ["512380", "512710", "512690", "159645"],
+      "新能源": ["159601", "159637"],
+      "黄金": ["518880", "159934"],
+      "稀土": ["159800", "560000"],
+      "电力": ["515220", "570018"],
+      "半导体": ["512480", "159648"]
+    }
+  },
+  "valuation_rules": {
+    "growth_industries": [
+      "软件",
+      "半导体",
+      "新能源",
+      "芯片",
+      "电动汽车",
+      "光伏",
+      "人工智能",
+      "算力",
+      "机器人"
+    ],
+    "growth_stock_pe_range": [10, 80],
+    "stable_stock_pe_range": [8, 35]
+  },
+  "market_analysis": {
+    "high_volatility_threshold": 3,
+    "bear_market_indicator": "price_below_ma60",
+    "sentiment_indicators": {
+      "positive_threshold": 0.02,
+      "negative_threshold": -0.02
+    }
+  },
+  "api_config": {
+    "fetch_timeout": 10,
+    "batch_size": 50,
+    "retry_count": 2,
+    "retry_delay": 1.0
+  },
+  "logging": {
+    "level": "INFO",
+    "enable_file": false,
+    "log_file": "scanner.log"
+  }
+}

@@ -4,7 +4,8 @@ class OpenClawWebSocket {
   private ws: WebSocket | null = null;
   private url: string = 'ws://127.0.0.1:18789';
   // 替换成你自己的 token
-  private token: string = 'b43f34201aa00efc5d19150d9e8887df5d70773c565ef7d0';
+  private token: string = 'b43f34201aa00efc5d19150d9e8887df5d70773c565ef7d0';  //wsl
+  //private token: string = '7d900e227de26d4b89c1714c79720bebf2bec0142ee5e916';  //wsl
   private connected: boolean = false;
   private messageId: number = 1;
   private eventListeners: Map<string, ((data: any) => void)[]> = new Map();

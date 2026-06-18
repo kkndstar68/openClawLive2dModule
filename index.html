@@ -7,9 +7,94 @@
     <title>Live2D 浮窗</title>
     <!-- Cubism 4 Core -->
     <script src="/live2dcubismcore.min.js"></script>
+    <!-- ECharts for K-line charts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      
+      /* 股票监控弹窗滚动条样式 */
+      #candidateList::-webkit-scrollbar, #holdingList::-webkit-scrollbar {
+        width: 6px;
+      }
+      #candidateList::-webkit-scrollbar-track, #holdingList::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.05);
+        border-radius: 3px;
+      }
+      #candidateList::-webkit-scrollbar-thumb, #holdingList::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.2);
+        border-radius: 3px;
+      }
+      #candidateList::-webkit-scrollbar-thumb:hover, #holdingList::-webkit-scrollbar-thumb:hover {
+        background: rgba(255,255,255,0.3);
+      }
+      
+      /* Alpha选股滚动条样式 */
+      #alphaResultList::-webkit-scrollbar, #alphaDetailPanel::-webkit-scrollbar {
+        width: 6px;
+      }
+      #alphaResultList::-webkit-scrollbar-track, #alphaDetailPanel::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.05);
+        border-radius: 3px;
+      }
+      #alphaResultList::-webkit-scrollbar-thumb, #alphaDetailPanel::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.2);
+        border-radius: 3px;
+      }
+      #alphaResultList::-webkit-scrollbar-thumb:hover, #alphaDetailPanel::-webkit-scrollbar-thumb:hover {
+        background: rgba(255,255,255,0.3);
+      }
+      
+      /* 闪烁动画 */
+      @keyframes alert-flash-danger {
+        0%, 100% { background: rgba(239,68,68,0.2); }
+        50% { background: rgba(239,68,68,0.4); }
+      }
+      @keyframes alert-flash-warning {
+        0%, 100% { background: rgba(251,191,36,0.2); }
+        50% { background: rgba(251,191,36,0.4); }
+      }
+      @keyframes alert-flash-success {
+        0%, 100% { background: rgba(34,197,94,0.2); }
+        50% { background: rgba(34,197,94,0.4); }
+      }
+      @keyframes alert-flash-purple {
+        0%, 100% { background: rgba(168,85,247,0.2); }
+        50% { background: rgba(168,85,247,0.4); }
+      }
+      .alert-danger { animation: alert-flash-danger 0.5s infinite; }
+      .alert-warning { animation: alert-flash-warning 0.8s infinite; }
+      .alert-success { animation: alert-flash-success 0.5s infinite; }
+      .alert-purple { animation: alert-flash-purple 0.6s infinite; }
+      .stock-row.alert-purple {
+        border: 1px solid rgba(168,85,247,0.5);
+      }
+      
+      /* 股票行样式 */
+      .stock-row {
+        padding: 10px 12px;
+        border-radius: 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: rgba(255,255,255,0.03);
+      }
+      .stock-row:hover {
+        background: rgba(255,255,255,0.08);
+      }
+      .stock-row.selected {
+        background: rgba(59,130,246,0.3);
+        border: 1px solid rgba(59,130,246,0.5);
+      }
+      .stock-row.alert-danger {
+        border: 1px solid rgba(239,68,68,0.5);
+      }
+      .stock-row.alert-warning {
+        border: 1px solid rgba(251,191,36,0.5);
+      }
+      .stock-row.alert-success {
+        border: 1px solid rgba(34,197,94,0.5);
+      }
       /* 浮窗拖拽条：仅 Electron 下可拖拽窗口 */
       #electron-drag {
         position: fixed; top: 0; left: 0; right: 0; height: 32px;
@@ -148,6 +233,7 @@
             <button id="sendBtn" style="padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; background: rgba(0,122,255,0.6); color: #fff; font-size: 12px; font-weight: 500; transition: all 0.3s ease; -webkit-app-region: no-drag;">发送</button>
             <button id="editBtn" style="padding: 8px 12px; border-radius: 8px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; font-size: 12px; transition: all 0.3s ease; -webkit-app-region: no-drag;">编辑</button>
             <button id="bubbleTestBtn" style="padding: 8px 12px; border-radius: 8px; border: none; cursor: pointer; background: rgba(255,165,0,0.6); color: #fff; font-size: 12px; transition: all 0.3s ease; -webkit-app-region: no-drag;">气泡测试</button>
+            <button id="stockMonitorBtn" style="padding: 8px 12px; border-radius: 8px; border: none; cursor: pointer; background: rgba(0,255,128,0.6); color: #fff; font-size: 12px; transition: all 0.3s ease; -webkit-app-region: no-drag;">📈 股票监控</button>
           </div>
         </div>
         
@@ -173,6 +259,284 @@
             <div style="display: flex; gap: 12px; justify-content: flex-end;">
               <button id="cancelBtn" style="padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; background: rgba(255,255,255,0.2); color: #fff; font-size: 14px; transition: all 0.3s ease; -webkit-app-region: no-drag;">取消</button>
               <button id="saveBtn" style="padding: 10px 20px; border-radius: 10px; border: none; cursor: pointer; background: rgba(0,122,255,0.6); color: #fff; font-size: 14px; font-weight: 500; transition: all 0.3s ease; -webkit-app-region: no-drag;">保存</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 股票监控弹窗 -->
+        <div id="stockMonitorModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 1001; -webkit-app-region: no-drag;">
+          <div style="background: rgba(15,15,25,0.95); backdrop-filter: blur(20px); border-radius: 24px; padding: 0; width: 800px; max-width: 95vw; max-height: 90vh; overflow: hidden; -webkit-app-region: no-drag; box-shadow: 0 12px 48px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);">
+            
+            <!-- 顶部状态栏 -->
+            <div id="stockStatusBar" style="height: 48px; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <div style="display: flex; align-items: center; gap: 24px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="color: #fff; font-size: 14px; font-weight: 600;">🔥 上证</span>
+                  <span id="shIndex" style="color: #ef4444; font-size: 14px; font-weight: 600;">4214.56</span>
+                  <span id="shChange" style="color: #ef4444; font-size: 12px;">+0.83%</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="color: #fff; font-size: 14px; font-weight: 600;">深证</span>
+                  <span id="szIndex" style="color: #22c55e; font-size: 14px; font-weight: 600;">15887.32</span>
+                  <span id="szChange" style="color: #22c55e; font-size: 12px;">+2.07%</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="color: #fff; font-size: 14px; font-weight: 600;">创指</span>
+                  <span id="cyIndex" style="color: #3b82f6; font-size: 14px; font-weight: 600;">3928.75</span>
+                  <span id="cyChange" style="color: #3b82f6; font-size: 12px;">+3.46%</span>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="color: rgba(255,255,255,0.6); font-size: 12px;">涨停</span>
+                  <span style="color: #ef4444; font-size: 14px; font-weight: 600;">108</span>
+                  <span style="color: rgba(255,255,255,0.6); font-size: 12px;">跌停</span>
+                  <span style="color: #22c55e; font-size: 14px; font-weight: 600;">4</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                  <span id="networkStatus" style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></span>
+                  <span id="updateTime" style="color: rgba(255,255,255,0.6); font-size: 12px;">14:35:22</span>
+                  <button id="refreshStockBtn" style="padding: 4px 8px; border-radius: 4px; border: none; background: rgba(59,130,246,0.3); color: #60a5fa; font-size: 11px; cursor: pointer; transition: all 0.2s;" title="手动刷新股票数据">🔄</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 主内容区域 -->
+            <div style="display: flex; height: calc(100% - 48px);">
+              
+              <!-- 左侧：选股池 -->
+              <div style="flex: 1; border-right: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column;">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(0,0,0,0.2);">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 14px; font-weight: 600; color: #fff;">📊 选股池</span>
+                    <span style="background: rgba(59,130,246,0.3); color: #60a5fa; font-size: 12px; padding: 2px 8px; border-radius: 10px;" id="candidateCount">(3只)</span>
+                    <select id="candidateFilter" style="padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 12px; cursor: pointer;">
+                      <option value="today">今日股票池</option>
+                      <option value="all">全部股票池</option>
+                    </select>
+                  </div>
+                  <div style="display: flex; gap: 8px;">
+                    <button id="refreshCandidateBtn" style="padding: 6px 12px; border-radius: 6px; border: none; background: rgba(59,130,246,0.3); color: #60a5fa; font-size: 12px; cursor: pointer; transition: all 0.2s;" title="从数据库刷新选股池">🔄 刷新</button>
+                    <button id="addCandidateBtn" style="padding: 6px 12px; border-radius: 6px; border: none; background: rgba(34,197,94,0.3); color: #4ade80; font-size: 12px; cursor: pointer; transition: all 0.2s;">+ 添加</button>
+                    <button id="delCandidateBtn" style="padding: 6px 12px; border-radius: 6px; border: none; background: rgba(239,68,68,0.3); color: #f87171; font-size: 12px; cursor: pointer; transition: all 0.2s;">− 删除</button>
+                    <button id="alphaScanBtn" style="padding: 6px 12px; border-radius: 6px; border: none; background: rgba(168,85,247,0.3); color: #a78bfa; font-size: 12px; cursor: pointer; transition: all 0.2s;">🎯 Alpha选股</button>
+                  </div>
+                </div>
+                <div id="candidateList" style="flex: 1; overflow-y: auto; padding: 8px;">
+                  <!-- 选股池内容 -->
+                  <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">加载中...</div>
+                </div>
+              </div>
+
+              <!-- 右侧：持仓监控 -->
+              <div style="flex: 1.2; display: flex; flex-direction: column;">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: rgba(0,0,0,0.2);">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 14px; font-weight: 600; color: #fff;">💰 持仓监控</span>
+                    <span style="background: rgba(251,191,36,0.3); color: #fbbf24; font-size: 12px; padding: 2px 8px; border-radius: 10px;" id="holdingCount">(5只)</span>
+                  </div>
+                  <div style="display: flex; gap: 8px;">
+                    <button id="addHoldingBtn" style="padding: 6px 12px; border-radius: 6px; border: none; background: rgba(34,197,94,0.3); color: #4ade80; font-size: 12px; cursor: pointer; transition: all 0.2s;">+ 添加</button>
+                    <button id="delHoldingBtn" style="padding: 6px 12px; border-radius: 6px; border: none; background: rgba(239,68,68,0.3); color: #f87171; font-size: 12px; cursor: pointer; transition: all 0.2s;">− 卖出</button>
+                  </div>
+                </div>
+                <div id="holdingList" style="flex: 1; overflow-y: auto; padding: 8px;">
+                  <!-- 持仓内容 -->
+                  <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">加载中...</div>
+                </div>
+                <!-- 底部汇总栏 -->
+                <div id="holdingSummary" style="padding: 12px 16px; background: rgba(0,0,0,0.3); border-top: 1px solid rgba(255,255,255,0.08);">
+                  <div style="display: flex; justify-content: space-between;">
+                    <div style="display: flex; gap: 24px;">
+                      <span style="color: rgba(255,255,255,0.6); font-size: 12px;">总持仓:</span>
+                      <span style="color: #fff; font-size: 12px; font-weight: 600;">5只</span>
+                    </div>
+                    <div style="display: flex; gap: 24px;">
+                      <span style="color: rgba(255,255,255,0.6); font-size: 12px;">总市值:</span>
+                      <span style="color: #fff; font-size: 12px; font-weight: 600;">¥12,580</span>
+                    </div>
+                    <div style="display: flex; gap: 24px;">
+                      <span style="color: rgba(255,255,255,0.6); font-size: 12px;">今日浮盈:</span>
+                      <span style="color: #22c55e; font-size: 12px; font-weight: 600;">+¥256 (+2.07%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 底部控制栏 -->
+            <div style="display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 16px; background: rgba(0,0,0,0.2); border-top: 1px solid rgba(255,255,255,0.08);">
+              <span style="color: rgba(255,255,255,0.6); font-size: 12px;">刷新间隔:</span>
+              <select id="refreshIntervalSelect" style="padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 12px; outline: none;">
+                <option value="5000">5秒</option>
+                <option value="10000" selected>10秒</option>
+                <option value="15000">15秒</option>
+                <option value="30000">30秒</option>
+                <option value="60000">1分钟</option>
+              </select>
+              <button id="confirmIntervalBtn" style="padding: 4px 12px; border-radius: 4px; border: none; background: rgba(59,130,246,0.5); color: #fff; font-size: 12px; cursor: pointer; transition: all 0.2s;">确认</button>
+            </div>
+
+            <!-- 关闭按钮 -->
+            <button id="closeStockModalBtn" style="position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; border-radius: 50%; border: none; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); font-size: 16px; cursor: pointer; transition: all 0.2s; -webkit-app-region: no-drag;">×</button>
+          </div>
+        </div>
+
+        <!-- 添加股票弹窗 -->
+        <div id="addStockModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 1002; -webkit-app-region: no-drag;">
+          <div style="background: rgba(20,20,35,0.95); backdrop-filter: blur(20px); border-radius: 20px; padding: 24px; width: 420px; max-width: 90%; -webkit-app-region: no-drag; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);">
+            <h3 style="color: #fff; margin-bottom: 20px; font-size: 18px; font-weight: 600;">➕ 添加股票</h3>
+            
+            <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+              <input id="stockCodeInput" type="text" placeholder="股票代码" style="flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 14px; outline: none; transition: all 0.2s;" maxlength="6">
+              <button id="searchStockBtn" style="padding: 10px 16px; border-radius: 8px; border: none; background: rgba(59,130,246,0.6); color: #fff; font-size: 14px; cursor: pointer;">查询</button>
+            </div>
+            
+            <div style="margin-bottom: 16px;">
+              <input id="stockNameInput" type="text" placeholder="股票名称" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 14px; outline: none; transition: all 0.2s;" readonly>
+            </div>
+
+            <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <div style="color: rgba(255,255,255,0.8); font-size: 12px; margin-bottom: 12px; font-weight: 600;">── 选股池模式 ──</div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div>
+                  <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">买点1</label>
+                  <input id="buyPoint1Input" type="number" step="0.01" placeholder="买点1" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 13px; outline: none;">
+                </div>
+                <div>
+                  <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">买点2</label>
+                  <input id="buyPoint2Input" type="number" step="0.01" placeholder="买点2" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 13px; outline: none;">
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+                <div>
+                  <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">止损</label>
+                  <input id="stopLossInput" type="number" step="0.01" placeholder="止损价" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 13px; outline: none;">
+                </div>
+                <div>
+                  <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">止盈</label>
+                  <input id="takeProfitInput" type="text" placeholder="止盈价(如:19.80/21.50)" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 13px; outline: none;">
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+              <div style="color: rgba(255,255,255,0.8); font-size: 12px; margin-bottom: 12px; font-weight: 600;">── 持仓模式 ──</div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div>
+                  <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">成本价</label>
+                  <input id="costPriceInput" type="number" step="0.01" placeholder="成本价" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 13px; outline: none;">
+                </div>
+                <div>
+                  <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">股数</label>
+                  <input id="sharesInput" type="number" step="100" placeholder="股数" style="width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 13px; outline: none;">
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+              <button id="cancelAddBtn" style="padding: 10px 20px; border-radius: 8px; border: none; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); font-size: 14px; cursor: pointer; transition: all 0.2s;">取消</button>
+              <button id="confirmAddBtn" style="padding: 10px 20px; border-radius: 8px; border: none; background: rgba(34,197,94,0.6); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;">确认添加</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 卖出股票弹窗 -->
+        <div id="sellStockModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 1002; -webkit-app-region: no-drag;">
+          <div style="background: rgba(20,20,35,0.95); backdrop-filter: blur(20px); border-radius: 20px; padding: 24px; width: 380px; max-width: 90%; -webkit-app-region: no-drag; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);">
+            <h3 style="color: #fff; margin-bottom: 20px; font-size: 18px; font-weight: 600;">💰 卖出股票</h3>
+            
+            <div style="margin-bottom: 16px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 8px;">
+              <div style="color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 8px;" id="sellStockName">股票名称</div>
+              <div style="display: flex; gap: 16px; font-size: 12px;">
+                <span style="color: rgba(255,255,255,0.6);">成本: <span style="color: #fff;">¥<span id="sellStockCost">0.00</span></span></span>
+                <span style="color: rgba(255,255,255,0.6);">股数: <span style="color: #fff;"><span id="sellStockShares">0</span>股</span></span>
+              </div>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">卖出价格</label>
+              <input id="sellPriceInput" type="number" step="0.01" placeholder="请输入卖出价格" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 14px; outline: none;">
+            </div>
+            
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+              <button onclick="closeSellModal()" style="padding: 10px 20px; border-radius: 8px; border: none; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); font-size: 14px; cursor: pointer; transition: all 0.2s;">取消</button>
+              <button id="confirmSellBtn" style="padding: 10px 20px; border-radius: 8px; border: none; background: rgba(239,68,68,0.6); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;">确认卖出</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alpha选股界面 -->
+        <div id="alphaScanModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 1002; -webkit-app-region: no-drag;">
+          <div style="background: rgba(15,15,25,0.95); backdrop-filter: blur(20px); border-radius: 24px; padding: 0; width: 900px; max-width: 95vw; max-height: 85vh; overflow: hidden; -webkit-app-region: no-drag; box-shadow: 0 12px 48px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);">
+            
+            <!-- 标题栏 -->
+            <div style="height: 52px; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.08);">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <span style="font-size: 20px;">🎯</span>
+                <span style="color: #fff; font-size: 16px; font-weight: 600;">Alpha选股界面</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <button id="startAlphaScanBtn" style="padding: 8px 20px; border-radius: 6px; border: none; background: rgba(34,197,94,0.5); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;">开始扫描</button>
+                <button id="closeAlphaModalBtn" style="width: 32px; height: 32px; border-radius: 50%; border: none; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); font-size: 16px; cursor: pointer; transition: all 0.2s;">×</button>
+              </div>
+            </div>
+
+            <!-- 内容区域 -->
+            <div style="display: flex; height: calc(100% - 52px);">
+              <!-- 左侧结果列表 -->
+              <div style="flex: 1; border-right: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; max-height: 100%;">
+                <div style="padding: 12px 16px; background: rgba(0,0,0,0.2); border-bottom: 1px solid rgba(255,255,255,0.08);">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: rgba(255,255,255,0.8); font-size: 13px;">📊 选股结果</span>
+                    <span id="alphaResultCount" style="background: rgba(59,130,246,0.3); color: #60a5fa; font-size: 12px; padding: 2px 8px; border-radius: 10px;">0只</span>
+                  </div>
+                </div>
+                <div id="alphaResultList" style="flex: 1; overflow-y: auto; padding: 8px; min-height: 0; max-height: calc(100vh - 180px);">
+                  <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">
+                    <div style="font-size: 32px; margin-bottom: 12px;">🔍</div>
+                    <div>点击开始扫描按钮进行选股</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 右侧详情面板 -->
+              <div style="flex: 1.2; display: flex; flex-direction: column;">
+                <div style="padding: 12px 16px; background: rgba(0,0,0,0.2); border-bottom: 1px solid rgba(255,255,255,0.08);">
+                  <span style="color: rgba(255,255,255,0.8); font-size: 13px;">📋 股票详情</span>
+                </div>
+                <div id="alphaDetailPanel" style="flex: 1; overflow-y: auto; padding: 16px;">
+                  <div style="text-align: center; color: rgba(255,255,255,0.4); padding: 40px 0;">
+                    <div style="font-size: 32px; margin-bottom: 12px;">📈</div>
+                    <div>选择一只股票查看详情</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 卖出股票弹窗 -->
+        <div id="sellStockModal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: none; align-items: center; justify-content: center; z-index: 1002; -webkit-app-region: no-drag;">
+          <div style="background: rgba(20,20,35,0.95); backdrop-filter: blur(20px); border-radius: 20px; padding: 24px; width: 380px; max-width: 90%; -webkit-app-region: no-drag; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);">
+            <h3 style="color: #fff; margin-bottom: 20px; font-size: 18px; font-weight: 600;">💰 卖出股票</h3>
+            
+            <div style="margin-bottom: 16px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 8px;">
+              <div style="color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 8px;" id="sellStockName">股票名称</div>
+              <div style="display: flex; gap: 16px; font-size: 12px;">
+                <span style="color: rgba(255,255,255,0.6);">成本: <span style="color: #fff;">¥<span id="sellStockCost">0.00</span></span></span>
+                <span style="color: rgba(255,255,255,0.6);">股数: <span style="color: #fff;"><span id="sellStockShares">0</span>股</span></span>
+              </div>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+              <label style="display: block; color: rgba(255,255,255,0.6); font-size: 12px; margin-bottom: 4px;">卖出价格</label>
+              <input id="sellPriceInput" type="number" step="0.01" placeholder="请输入卖出价格" style="width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.3); color: #fff; font-size: 14px; outline: none;">
+            </div>
+            
+            <div style="display: flex; gap: 12px; justify-content: flex-end;">
+              <button onclick="closeSellModal()" style="padding: 10px 20px; border-radius: 8px; border: none; background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.8); font-size: 14px; cursor: pointer; transition: all 0.2s;">取消</button>
+              <button id="confirmSellBtn" style="padding: 10px 20px; border-radius: 8px; border: none; background: rgba(239,68,68,0.6); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;">确认卖出</button>
             </div>
           </div>
         </div>
